@@ -1627,8 +1627,8 @@ def main():
         # offload_selective variant runs router first, then loads only selected expert slices.
         print(f"[{fmt_time(time.time() - t_start)}] Using offload loader (no layer weights)...")
         model, tokenizer = load_model_no_weights(model_path)
-        # Cap wired memory — we only need ~2-3GB active at any time
-        wired_gb = min(args.max_mem_gb * 0.4, 20)  # conservative: 40% of limit or 20GB max
+        # Cap wired memory — needs non-expert weights (~3-5GB) + expert cache (~15-20GB)
+        wired_gb = min(args.max_mem_gb * 0.7, 35)  # 70% of limit or 35GB max
         mx.set_wired_limit(int(wired_gb * 1024**3))
         mode_note = ""
         if args.mode == "offload_lazy":
