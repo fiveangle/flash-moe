@@ -198,7 +198,9 @@ def _read_single_expert_attrs(expert_idx, layer_idx, expert_file_map, header_cac
         header_cache: dict for cached headers (read-only after init, thread-safe)
 
     Returns:
-        dict of (proj_name, attr_name) -> mx.array of shape [1, ...expert_dims]
+        (expert_idx, results_dict, io_stats_dict)
+        results_dict: (proj_name, attr_name) -> mx.array of shape [1, ...expert_dims]
+        io_stats_dict: {"bytes_read": int, "seek_count": int, "io_time_s": float, "array_time_s": float}
     """
     NP_DTYPE = {
         'U32': (np.uint32, 4),
@@ -211,6 +213,11 @@ def _read_single_expert_attrs(expert_idx, layer_idx, expert_file_map, header_cac
     results = {}
     # Thread-local file handles: filepath -> open file object
     local_handles = {}
+    # I/O instrumentation counters
+    io_bytes = 0
+    io_seeks = 0
+    io_time = 0.0
+    array_time = 0.0
 
     try:
         for proj_name in ("gate_proj", "up_proj", "down_proj"):
@@ -242,8 +249,17 @@ def _read_single_expert_attrs(expert_idx, layer_idx, expert_file_map, header_cac
                 f = local_handles[filepath]
 
                 offset = tensor_start + int(expert_idx) * expert_bytes
+
+                # --- Instrumented file I/O ---
+                t_io = time.time()
                 f.seek(offset)
                 raw = f.read(expert_bytes)
+                io_time += time.time() - t_io
+                io_bytes += expert_bytes
+                io_seeks += 1
+
+                # --- Instrumented array construction ---
+                t_arr = time.time()
                 np_arr = np.frombuffer(raw, dtype=np_dtype).reshape(expert_shape)
 
                 if dtype_str == 'BF16':
@@ -251,11 +267,18 @@ def _read_single_expert_attrs(expert_idx, layer_idx, expert_file_map, header_cac
                     results[(proj_name, attr_name)] = mx.array(np_f32).astype(mx.bfloat16)
                 else:
                     results[(proj_name, attr_name)] = mx.array(np_arr)
+                array_time += time.time() - t_arr
     finally:
         for fh in local_handles.values():
             fh.close()
 
-    return expert_idx, results
+    io_stats = {
+        "bytes_read": io_bytes,
+        "seek_count": io_seeks,
+        "io_time_s": io_time,
+        "array_time_s": array_time,
+    }
+    return expert_idx, results, io_stats
 
 
 class ExpertCache:
@@ -964,11 +987,21 @@ def generate_offload_selective(model, tokenizer, prompt, max_tokens, weight_inde
 
     # === LRU cache for expert weight slices ===
     # 1536 entries = 48 layers × 8 experts × 4 tokens worth. ~7.6GB max.
-    # Larger cache improves hit rate as expert reuse grows with longer sequences.
+    # Better tok/s per GB of memory than 3072 entries.
     expert_cache = ExpertCache(max_entries=1536)
+
+    # === I/O instrumentation counters (per-token, reset each token) ===
+    io_stats_history = []  # list of per-token dicts
 
     for token_idx in range(max_tokens):
         t_token_start = time.time()
+
+        # Per-token I/O counters
+        token_io_bytes = 0
+        token_io_seeks = 0
+        token_io_time = 0.0
+        token_array_time = 0.0
+        token_moe_compute_time = 0.0
 
         # --- Embed ---
         h = text_model.embed_tokens(input_ids)
@@ -979,11 +1012,10 @@ def generate_offload_selective(model, tokenizer, prompt, max_tokens, weight_inde
         ssm_mask = create_ssm_mask(h, cache[text_model.ssm_idx])
 
         layer_timings = []
+        layers_with_experts = []  # Track which layers had expert weights loaded
 
-        # --- Per-layer: selective load, compute, clear ---
+        # --- Per-layer: selective load, compute (clearing deferred to end of token) ---
         for i in range(num_layers):
-            if token_idx <= 1 and i % 12 == 0:
-                print(f"    tok{token_idx+1} layer {i}/{num_layers} mem={get_mem_gb():.1f}GB t={time.time()-t_token_start:.1f}s", flush=True)
             layer = layers[i]
             c = cache[i]
 
@@ -1060,7 +1092,12 @@ def generate_offload_selective(model, tokenizer, prompt, max_tokens, weight_inde
                         for expert_idx in uncached_list
                     ]
                     for future in futures:
-                        eidx, attrs = future.result()
+                        eidx, attrs, io_stats = future.result()
+                        # Accumulate I/O stats from this expert read
+                        token_io_bytes += io_stats["bytes_read"]
+                        token_io_seeks += io_stats["seek_count"]
+                        token_io_time += io_stats["io_time_s"]
+                        token_array_time += io_stats["array_time_s"]
                         for (proj_name, attr_name), arr in attrs.items():
                             expert_cache.put_attr(i, eidx, proj_name, attr_name, arr)
 
@@ -1082,6 +1119,7 @@ def generate_offload_selective(model, tokenizer, prompt, max_tokens, weight_inde
                     switch.down_proj.parameters())
 
             # Run expert MoE computation with remapped indices
+            t_moe = time.time()
             y = switch(h_post, remapped_inds)
             y = (y * scores[..., None]).sum(axis=-2)
 
@@ -1092,25 +1130,44 @@ def generate_offload_selective(model, tokenizer, prompt, max_tokens, weight_inde
 
             h = h_mid + y
             mx.eval(h)
+            token_moe_compute_time += time.time() - t_moe
 
             expert_time = time.time() - t_expert
 
-            # ====== Phase 4: Clear only expert weights (keep attention/norms resident) ======
-            t_clear = time.time()
-            clear_expert_weights(model, i)
-            clear_time = time.time() - t_clear
+            # Track this layer for batched clearing at end of token
+            if hasattr(layer.mlp, 'switch_mlp'):
+                layers_with_experts.append(i)
 
             layer_timings.append({
                 "layer": i,
                 "is_linear": layer.is_linear,
                 "attn_router_ms": attn_router_time * 1000,
                 "expert_ms": expert_time * 1000,
-                "clear_ms": clear_time * 1000,
+                "clear_ms": 0.0,  # measured at token level now
                 "load_ms": expert_time * 1000,  # total I/O for compat (only experts now)
                 "compute_ms": attn_router_time * 1000,  # compute portion for compat
             })
 
         all_layer_timings.append(layer_timings)
+
+        # ====== Batched Phase 4: Clear all expert weights at once ======
+        t_clear = time.time()
+        if layers_with_experts:
+            # Collect all dummy weights for all layers in one list
+            all_dummy_weights = []
+            for layer_i in layers_with_experts:
+                layer_obj = layers[layer_i]
+                switch = layer_obj.mlp.switch_mlp
+                for proj_name in ["gate_proj", "up_proj", "down_proj"]:
+                    proj = getattr(switch, proj_name)
+                    for attr_name in ["weight", "scales", "biases"]:
+                        if hasattr(proj, attr_name):
+                            full_name = f"model.layers.{layer_i}.mlp.switch_mlp.{proj_name}.{attr_name}"
+                            all_dummy_weights.append((full_name, mx.zeros((1,), dtype=getattr(proj, attr_name).dtype)))
+            if all_dummy_weights:
+                lm.load_weights(all_dummy_weights, strict=False)
+            mx.clear_cache()
+        batch_clear_time = time.time() - t_clear
 
         # --- Norm + LM head (already pinned) ---
         h = text_model.norm(h)
@@ -1134,6 +1191,16 @@ def generate_offload_selective(model, tokenizer, prompt, max_tokens, weight_inde
         cur_mem = get_mem_gb()
         peak_mem = max(peak_mem, cur_mem)
 
+        # Store I/O stats for this token
+        io_stats_history.append({
+            "bytes_read": token_io_bytes,
+            "seek_count": token_io_seeks,
+            "io_time_s": token_io_time,
+            "array_time_s": token_array_time,
+            "moe_compute_time_s": token_moe_compute_time,
+            "token_time_s": token_time,
+        })
+
         # Safety: check system memory pressure every 5 tokens
         if (token_idx + 1) % 5 == 0:
             pressure, free_pct = check_memory_pressure()
@@ -1145,7 +1212,7 @@ def generate_offload_selective(model, tokenizer, prompt, max_tokens, weight_inde
         # Progress
         total_attn_router = sum(lt["attn_router_ms"] for lt in layer_timings)
         total_expert = sum(lt["expert_ms"] for lt in layer_timings)
-        total_clear = sum(lt["clear_ms"] for lt in layer_timings)
+        total_clear = batch_clear_time * 1000
 
         cache_hr = expert_cache.hit_rate
 
@@ -1176,6 +1243,38 @@ def generate_offload_selective(model, tokenizer, prompt, max_tokens, weight_inde
     total_time = time.time() - t_start
     total_tokens = len(generated_tokens)
     text = tokenizer.decode(generated_tokens)
+
+    # === I/O instrumentation summary (skip first token — prompt processing is different) ===
+    if len(io_stats_history) > 1:
+        gen_io = io_stats_history[1:]  # skip prompt token
+        avg_bytes = np.mean([s["bytes_read"] for s in gen_io])
+        avg_seeks = np.mean([s["seek_count"] for s in gen_io])
+        avg_io_ms = np.mean([s["io_time_s"] for s in gen_io]) * 1000
+        avg_arr_ms = np.mean([s["array_time_s"] for s in gen_io]) * 1000
+        avg_moe_ms = np.mean([s["moe_compute_time_s"] for s in gen_io]) * 1000
+        avg_tok_ms = np.mean([s["token_time_s"] for s in gen_io]) * 1000
+        avg_other_ms = avg_tok_ms - avg_io_ms - avg_arr_ms - avg_moe_ms
+        total_bytes = sum(s["bytes_read"] for s in gen_io)
+        total_seeks = sum(s["seek_count"] for s in gen_io)
+
+        print(f"\n  === I/O Instrumentation Summary (tokens 2-{total_tokens}) ===")
+        print(f"  Avg bytes/token:  {avg_bytes/1024/1024:.1f} MB")
+        print(f"  Avg seeks/token:  {avg_seeks:.0f}")
+        print(f"  Avg file I/O:     {avg_io_ms:.1f} ms/token")
+        print(f"  Avg arr build:    {avg_arr_ms:.1f} ms/token")
+        print(f"  Avg MoE compute:  {avg_moe_ms:.1f} ms/token")
+        print(f"  Avg other:        {avg_other_ms:.1f} ms/token (attn+router+clear+overhead)")
+        print(f"  Avg total:        {avg_tok_ms:.1f} ms/token")
+        print(f"  Total disk read:  {total_bytes/1024/1024:.1f} MB across {total_seeks} seeks")
+        if avg_io_ms > 0:
+            bw = (avg_bytes / 1024 / 1024) / (avg_io_ms / 1000)
+            print(f"  Effective disk BW: {bw:.0f} MB/s")
+    else:
+        avg_bytes = 0
+        avg_seeks = 0
+        avg_io_ms = 0
+        avg_arr_ms = 0
+        avg_moe_ms = 0
 
     # Aggregate layer timing stats (skip first token — prompt processing is different)
     if all_layer_timings and len(all_layer_timings) > 1:
@@ -1217,6 +1316,11 @@ def generate_offload_selective(model, tokenizer, prompt, max_tokens, weight_inde
         "expert_cache_misses": expert_cache.misses,
         "expert_cache_hit_rate": expert_cache.hit_rate,
         "expert_cache_entries": len(expert_cache.cache),
+        "avg_io_bytes_per_token": avg_bytes,
+        "avg_io_seeks_per_token": avg_seeks,
+        "avg_io_ms_per_token": avg_io_ms,
+        "avg_arr_ms_per_token": avg_arr_ms,
+        "avg_moe_compute_ms_per_token": avg_moe_ms,
     }
 
 
