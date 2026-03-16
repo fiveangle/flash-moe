@@ -11,4 +11,5 @@ dependencies = [
     "psutil>=6.0.0",
     "matplotlib>=3.9.0",
     "numpy>=1.26.0",
+    "pandas>=3.0.1",
 ]

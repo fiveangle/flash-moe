@@ -110,3 +110,37 @@ documentation/
 - ANE dynamic pipeline uses matmul (not conv), so ch=512 constraint doesn't apply
 - MIL `program(1.3)` / `ios18` format works
 - 17.5 GB/s SSD read = 3x faster than M1 Max in the LLM-in-a-Flash paper
+
+## Experimental Results
+
+### Qwen3.5-35B-A3B (4-bit, ~19GB — fits in 48GB DRAM)
+
+Architecture: 40 layers (30 linear attention/SSM + 10 full attention), 256 experts, 8 active per token, hidden=2048
+
+| Mode | tok/s | Peak Mem | Notes |
+|------|-------|----------|-------|
+| baseline | 6.87 | 9.5 GB | mlx_lm native stream_generate |
+| layerwise | 9.38 | 8.4 GB | manual forward, per-layer mx.eval() |
+| stream | 3.42 | 13.2 GB | reload from safetensors per layer per token |
+| lazy (20tok) | 5.34 | 18.3 GB | mmap, OS pages on demand |
+| lazy (50tok) | 10.84 | 18.2 GB | ~43 tok/s generation after warmup |
+
+Key findings:
+- **SSD throughput**: 474MB/layer cold load in ~22ms = **~20 GB/s** (matches hardware spec)
+- **Warm (page-cached)**: ~1.5ms per layer (essentially free)
+- **Per-layer compute**: 0.54ms linear_attn, 0.51ms full_attn (generation phase)
+- **Lazy mode is best**: lowest initial memory (0.9 GB), OS manages paging efficiently
+- **Manual forward matches native exactly** (max logit diff = 0.0)
+
+### Expert Routing Analysis (35B)
+- Routing is **moderately diverse**: 43-57% of 256 experts activated across 30 tokens
+- Consecutive token overlap: 8-34% per layer (not very sticky)
+- LRU cache hit rates: 16-expert=49%, 32=59%, 64=68%, 128=71%
+- Implication: expert caching helps but doesn't eliminate SSD reads
+
+### 122B Memory Architecture
+- 48 layers (36 linear + 12 full), 256 experts, 8 active
+- **95% of model weight is MoE experts** (58GB of 61GB)
+- Active expert data per token: 1.81GB (out of 58GB)
+- Non-expert weights (attention, embed, norm, gate, lm_head): ~3GB
+- Strategy: pin 3GB non-expert, OS page cache handles expert paging
