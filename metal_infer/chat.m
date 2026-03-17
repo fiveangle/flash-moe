@@ -76,7 +76,7 @@ static int encode_user_message(const char *text, uint32_t *out, int max_out, int
     if (!tf) return -1;
     // System prompt on first turn enables thinking mode
     if (is_first_turn) {
-        fprintf(tf, "<|im_start|>system\nYou are a helpful assistant. /think<|im_end|>\n");
+        fprintf(tf, "<|im_start|>system\nYou are a helpful assistant. /think\nKeep your thinking concise and focused — aim for under 300 words in your <think> block before responding.<|im_end|>\n");
     }
     fprintf(tf, "<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n", text);
     fclose(tf);
@@ -126,6 +126,7 @@ static void chat_print_usage(const char *prog) {
     printf("  --cache-entries N    Expert LRU cache size (default: 2500)\n");
     printf("  --malloc-cache N     Malloc expert cache entries\n");
     printf("  --2bit               Use 2-bit quantized experts\n");
+    printf("  --think-budget N     Max thinking tokens (default: 2048, 0=unlimited)\n");
     printf("  --help               This message\n");
 }
 
@@ -152,12 +153,13 @@ int main(int argc, char **argv) {
             {"cache-entries",  required_argument, 0, 'C'},
             {"malloc-cache",   required_argument, 0, 'M'},
             {"2bit",          no_argument,       0, '2'},
+            {"think-budget",  required_argument, 0, 'B'},
             {"help",          no_argument,       0, 'h'},
             {0, 0, 0, 0}
         };
 
         int c;
-        while ((c = getopt_long(argc, argv, "m:w:j:v:k:C:M:2h", long_options, NULL)) != -1) {
+        while ((c = getopt_long(argc, argv, "m:w:j:v:k:C:M:B:2h", long_options, NULL)) != -1) {
             switch (c) {
                 case 'm': model_path = optarg; break;
                 case 'w': weights_path = optarg; break;
@@ -167,6 +169,7 @@ int main(int argc, char **argv) {
                 case 'C': cache_entries = atoi(optarg); break;
                 case 'M': malloc_cache_entries = atoi(optarg); break;
                 case '2': g_use_2bit = 1; break;
+                case 'B': g_think_budget = atoi(optarg); break;
                 case 'h': chat_print_usage(argv[0]); return 0;
                 default:  chat_print_usage(argv[0]); return 1;
             }
@@ -436,12 +439,19 @@ int main(int argc, char **argv) {
             // ---- Stream generation ----
             double t_gen_start = now_ms();
             int gen_count = 0;
+            int in_think = 0;
+            int think_tokens = 0;
 
             printf("\n");
             for (int gen = 0; gen < MAX_RESPONSE_TOKENS; gen++) {
                 // Check EOS
                 if (next_token == EOS_TOKEN_1 || next_token == EOS_TOKEN_2) break;
                 if (next_token == IM_END_TOKEN) break;
+
+                // Think budget enforcement
+                if (next_token == THINK_START_TOKEN) in_think = 1;
+                if (next_token == THINK_END_TOKEN) in_think = 0;
+                if (in_think) think_tokens++;
 
                 // Check context overflow
                 if (conv.count + 1 >= MAX_CONV_TOKENS) {
@@ -481,6 +491,12 @@ int main(int argc, char **argv) {
                 }
                 lm_head_forward(wf, hidden, logits);
                 next_token = cpu_argmax(logits, VOCAB_SIZE);
+
+                // Think budget: force end thinking if over budget
+                if (in_think && g_think_budget > 0 && think_tokens >= g_think_budget) {
+                    next_token = THINK_END_TOKEN;
+                    in_think = 0;
+                }
             }
 
             // Append EOS to conversation history

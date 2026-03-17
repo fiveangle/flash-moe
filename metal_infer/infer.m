@@ -117,9 +117,11 @@
 #define MAX_SEQ_LEN 1048576  // 1M context — only 15 full-attn layers need KV cache, ~15GB at max
 #define GPU_KV_SEQ  8192     // GPU KV buffer pre-allocation (grows if exceeded, falls back to CPU attn)
 
-// EOS token
+// Special tokens
 #define EOS_TOKEN_1         248046
 #define EOS_TOKEN_2         248044
+#define THINK_START_TOKEN   248068  // <think>
+#define THINK_END_TOKEN     248069  // </think>
 
 #define MODEL_PATH_DEFAULT "/Users/danielwoods/.cache/huggingface/hub/models--mlx-community--Qwen3.5-397B-A17B-4bit/snapshots/39159bd8aa74f5c8446d2b2dc584f62bb51cb0d3"
 
@@ -167,6 +169,7 @@ static int g_expert_freq[NUM_LAYERS][NUM_EXPERTS];  // activation count per (lay
 static int g_freq_tracking = 0;  // enabled by --freq flag
 static int g_use_2bit = 0;       // enabled by --2bit flag: use packed_experts_2bit/ + 2-bit kernel
 static int g_cache_telemetry_enabled = 0;  // enabled by --cache-telemetry flag
+static int g_think_budget = 2048; // max thinking tokens before force-emitting </think>
 
 // Active expert size based on quantization mode
 static inline size_t active_expert_size(void) {
@@ -5720,9 +5723,22 @@ static void serve_loop(
             // ---- Auto-regressive generation with SSE streaming ----
             double t_gen = now_ms();
             int gen_count = 0;
+            int in_think = 0;
+            int think_tokens = 0;
 
             for (int gen = 0; gen < max_gen; gen++) {
                 if (next_token == EOS_TOKEN_1 || next_token == EOS_TOKEN_2) break;
+
+                // Think budget enforcement
+                if (next_token == THINK_START_TOKEN) in_think = 1;
+                if (next_token == THINK_END_TOKEN) in_think = 0;
+                if (in_think) {
+                    think_tokens++;
+                    if (g_think_budget > 0 && think_tokens >= g_think_budget) {
+                        next_token = THINK_END_TOKEN;  // force end thinking
+                        in_think = 0;
+                    }
+                }
 
                 const char *tok_str = decode_token(vocab, next_token);
                 sse_send_delta(client_fd, request_id, tok_str);
@@ -5806,6 +5822,7 @@ static void print_usage(const char *prog) {
     printf("  --cache-telemetry    Report cold vs eviction misses and reuse distance\n");
     printf("  --2bit               Use 2-bit quantized experts (packed_experts_2bit/)\n");
     printf("  --gpu-linear         Alias for the fused GPU delta-net path (default)\n");
+    printf("  --think-budget N     Max thinking tokens before force </think> (default: 2048, 0=unlimited)\n");
     printf("  --serve PORT         Run HTTP server (OpenAI-compatible API)\n");
     printf("  --help               This message\n");
 }
@@ -5842,13 +5859,14 @@ int main(int argc, char **argv) {
             {"cache-telemetry", no_argument,     0, 'E'},
             {"2bit",          no_argument,       0, '2'},
             {"gpu-linear",    no_argument,       0, 'G'},
+            {"think-budget",  required_argument, 0, 'B'},
             {"serve",         required_argument, 0, 'R'},
             {"help",          no_argument,       0, 'h'},
             {0, 0, 0, 0}
         };
 
         int c;
-        while ((c = getopt_long(argc, argv, "m:w:j:v:p:P:t:k:C:M:R:LSTFE2Gh", long_options, NULL)) != -1) {
+        while ((c = getopt_long(argc, argv, "m:w:j:v:p:P:t:k:C:M:R:B:LSTFE2Gh", long_options, NULL)) != -1) {
             switch (c) {
                 case 'm': model_path = optarg; break;
                 case 'w': weights_path = optarg; break;
@@ -5867,6 +5885,7 @@ int main(int argc, char **argv) {
                 case 'E': g_cache_telemetry_enabled = 1; break;
                 case '2': g_use_2bit = 1; break;
                 case 'G': gpu_linear_attn_enabled = 1; break;
+                case 'B': g_think_budget = atoi(optarg); break;
                 case 'R': serve_port = atoi(optarg); break;
                 case 'h': print_usage(argv[0]); return 0;
                 default:  print_usage(argv[0]); return 1;
@@ -6173,6 +6192,8 @@ int main(int argc, char **argv) {
         fflush(stdout);
 
         int total_generated = 1;
+        int in_think = (next_token == THINK_START_TOKEN) ? 1 : 0;
+        int think_tokens = 0;
 
         // ---- Auto-regressive generation ----
         if (g_timing_enabled) timing_reset();
@@ -6184,6 +6205,11 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "\n[eos] Token %d at position %d\n", next_token, gen);
                 break;
             }
+
+            // Think budget enforcement
+            if (next_token == THINK_START_TOKEN) in_think = 1;
+            if (next_token == THINK_END_TOKEN) in_think = 0;
+            if (in_think) think_tokens++;
 
             // Embed the just-generated token (next iteration)
             cache_telemetry_note_token();
@@ -6216,6 +6242,12 @@ int main(int argc, char **argv) {
 
             // Greedy sample
             next_token = cpu_argmax(logits, VOCAB_SIZE);
+
+            // Think budget: force end thinking if over budget
+            if (in_think && g_think_budget > 0 && think_tokens >= g_think_budget) {
+                next_token = THINK_END_TOKEN;
+                in_think = 0;
+            }
             total_generated++;
 
             // Print decoded token
