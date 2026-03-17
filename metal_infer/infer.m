@@ -13,6 +13,17 @@
  *   - Linear attention: conv1d(kernel=4) + gated delta recurrence
  *   - Full attention: standard QKV + scaled dot product + RoPE
  *
+ * Command buffer optimization (fused_layer_forward):
+ *   Per-layer Metal command buffer structure:
+ *     CMD1: attention input projections (3-4 dispatches, 1 commit)
+ *     CPU:  attention compute (RoPE/softmax/delta-net) + o_proj
+ *     CMD2: routing + shared expert gate/up (4 dispatches, 1 commit)
+ *     CPU:  softmax + top-K + pread all K experts
+ *     CMD3: all K expert forwards + shared SwiGLU + shared down (1 commit)
+ *   Total: 3 cmd buffers per layer (was 4+K=8 for K=4).
+ *   Multi-expert buffers (MAX_K=8 independent slots) allow all K expert
+ *   forwards to be encoded into a single command buffer.
+ *
  * Build:  clang -O2 -Wall -fobjc-arc -framework Metal -framework Foundation -lpthread infer.m -o infer
  * Run:    ./infer --prompt "Explain relativity" --tokens 50
  */
@@ -541,12 +552,29 @@ typedef struct {
     // Batched matmul output slots (preallocated, reused across dispatches)
     id<MTLBuffer> batch_out[MAX_BATCH_SLOTS];
     // Reusable buffers for expert computation (avoids per-expert alloc)
+    // Legacy single-expert buffers (kept for gpu_expert_forward compat)
     id<MTLBuffer> buf_expert_data;   // holds one expert's packed weights (EXPERT_SIZE bytes)
     id<MTLBuffer> buf_expert_input;  // h_post input [HIDDEN_DIM floats]
     id<MTLBuffer> buf_expert_gate;   // gate_proj output [MOE_INTERMEDIATE floats]
     id<MTLBuffer> buf_expert_up;     // up_proj output [MOE_INTERMEDIATE floats]
     id<MTLBuffer> buf_expert_act;    // SwiGLU output [MOE_INTERMEDIATE floats]
     id<MTLBuffer> buf_expert_out;    // down_proj output [HIDDEN_DIM floats]
+    // Multi-expert buffers: K independent sets so all experts can be encoded
+    // into a SINGLE command buffer (no per-expert commit+wait).
+    // Each expert k uses slot [k].
+    #define MAX_K 8
+    id<MTLBuffer> buf_multi_expert_data[MAX_K];   // [EXPERT_SIZE bytes] each
+    id<MTLBuffer> buf_multi_expert_gate[MAX_K];   // [MOE_INTERMEDIATE floats]
+    id<MTLBuffer> buf_multi_expert_up[MAX_K];     // [MOE_INTERMEDIATE floats]
+    id<MTLBuffer> buf_multi_expert_act[MAX_K];    // [MOE_INTERMEDIATE floats]
+    id<MTLBuffer> buf_multi_expert_out[MAX_K];    // [HIDDEN_DIM floats]
+    id<MTLBuffer> buf_multi_expert_input;         // [HIDDEN_DIM floats] (shared, read-only during dispatch)
+    // Shared expert buffers for fused CMD2 (shared gate/up computed in CMD1,
+    // SwiGLU + down_proj in CMD2 alongside routed experts)
+    id<MTLBuffer> buf_shared_gate;   // [SHARED_INTERMEDIATE floats]
+    id<MTLBuffer> buf_shared_up;     // [SHARED_INTERMEDIATE floats]
+    id<MTLBuffer> buf_shared_act;    // [SHARED_INTERMEDIATE floats] (SwiGLU output)
+    id<MTLBuffer> buf_shared_out;    // [HIDDEN_DIM floats] (down_proj output)
 } MetalCtx;
 
 static MetalCtx *g_metal = NULL;
@@ -650,7 +678,33 @@ static MetalCtx *metal_setup(void) {
     ctx->buf_expert_out   = [ctx->device newBufferWithLength:HIDDEN_DIM * sizeof(float)
                                                      options:MTLResourceStorageModeShared];
 
-    printf("[metal] Inference pipelines ready (expert buffers allocated)\n");
+    // Multi-expert buffers: K independent slots
+    ctx->buf_multi_expert_input = [ctx->device newBufferWithLength:HIDDEN_DIM * sizeof(float)
+                                                           options:MTLResourceStorageModeShared];
+    for (int k = 0; k < MAX_K; k++) {
+        ctx->buf_multi_expert_data[k] = [ctx->device newBufferWithLength:EXPERT_SIZE
+                                                                 options:MTLResourceStorageModeShared];
+        ctx->buf_multi_expert_gate[k] = [ctx->device newBufferWithLength:MOE_INTERMEDIATE * sizeof(float)
+                                                                 options:MTLResourceStorageModeShared];
+        ctx->buf_multi_expert_up[k]   = [ctx->device newBufferWithLength:MOE_INTERMEDIATE * sizeof(float)
+                                                                 options:MTLResourceStorageModeShared];
+        ctx->buf_multi_expert_act[k]  = [ctx->device newBufferWithLength:MOE_INTERMEDIATE * sizeof(float)
+                                                                 options:MTLResourceStorageModeShared];
+        ctx->buf_multi_expert_out[k]  = [ctx->device newBufferWithLength:HIDDEN_DIM * sizeof(float)
+                                                                 options:MTLResourceStorageModeShared];
+    }
+
+    // Shared expert buffers (for fused CMD2)
+    ctx->buf_shared_gate = [ctx->device newBufferWithLength:SHARED_INTERMEDIATE * sizeof(float)
+                                                    options:MTLResourceStorageModeShared];
+    ctx->buf_shared_up   = [ctx->device newBufferWithLength:SHARED_INTERMEDIATE * sizeof(float)
+                                                    options:MTLResourceStorageModeShared];
+    ctx->buf_shared_act  = [ctx->device newBufferWithLength:SHARED_INTERMEDIATE * sizeof(float)
+                                                    options:MTLResourceStorageModeShared];
+    ctx->buf_shared_out  = [ctx->device newBufferWithLength:HIDDEN_DIM * sizeof(float)
+                                                    options:MTLResourceStorageModeShared];
+
+    printf("[metal] Inference pipelines ready (multi-expert[%d] + shared buffers allocated)\n", MAX_K);
     return ctx;
 }
 
@@ -825,6 +879,277 @@ static void gpu_batch_matvec(
     }
 }
 
+// ============================================================================
+// Encode-only variants: add dispatches to an EXISTING command buffer.
+// These do NOT commit — the caller batches multiple encode calls into one
+// command buffer and commits once, eliminating per-dispatch overhead.
+// ============================================================================
+
+// Encode N matmuls into cmdbuf. Input must already be in ctx->buf_input.
+static void gpu_encode_batch_matvec(
+    MetalCtx *ctx,
+    id<MTLCommandBuffer> cmdbuf,
+    BatchMatvecSpec *specs, int num_specs
+) {
+    for (int i = 0; i < num_specs; i++) {
+        BatchMatvecSpec *s = &specs[i];
+        NSUInteger w_off = (NSUInteger)((const char *)s->W      - (const char *)[ctx->wf_buf contents]);
+        NSUInteger s_off = (NSUInteger)((const char *)s->scales  - (const char *)[ctx->wf_buf contents]);
+        NSUInteger b_off = (NSUInteger)((const char *)s->biases  - (const char *)[ctx->wf_buf contents]);
+
+        id<MTLBuffer> o_buf = ctx->batch_out[s->batch_slot];
+
+        id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+        int use_v3 = (s->in_dim <= 4096);
+        [enc setComputePipelineState: use_v3 ? ctx->matvec_v3 : ctx->matvec_fast];
+        [enc setBuffer:ctx->wf_buf  offset:w_off atIndex:0];
+        [enc setBuffer:ctx->wf_buf  offset:s_off atIndex:1];
+        [enc setBuffer:ctx->wf_buf  offset:b_off atIndex:2];
+        [enc setBuffer:ctx->buf_input offset:0   atIndex:3];
+        [enc setBuffer:o_buf        offset:0     atIndex:4];
+        [enc setBytes:&s->out_dim   length:4     atIndex:5];
+        [enc setBytes:&s->in_dim    length:4     atIndex:6];
+        [enc setBytes:&s->group_size length:4    atIndex:7];
+
+        if (use_v3) {
+            uint32_t num_tgs = (s->out_dim + 7) / 8;
+            [enc dispatchThreadgroups:MTLSizeMake(num_tgs, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        } else {
+            [enc dispatchThreadgroups:MTLSizeMake(s->out_dim, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        }
+        [enc endEncoding];
+    }
+}
+
+// Copy batch results from GPU buffers back to CPU pointers.
+static void gpu_flush_batch_results(MetalCtx *ctx, BatchMatvecSpec *specs, int num_specs) {
+    for (int i = 0; i < num_specs; i++) {
+        BatchMatvecSpec *s = &specs[i];
+        memcpy(s->out_cpu, [ctx->batch_out[s->batch_slot] contents],
+               s->out_dim * sizeof(float));
+    }
+}
+
+// Encode a single matvec reading from buf_expert_act into buf_expert_out,
+// using weight pointers into the mmap'd weight file.
+// Used for shared expert down_proj which reads from a different input than
+// the attention projections.
+static void gpu_encode_dequant_matvec_with_io_bufs(
+    MetalCtx *ctx,
+    id<MTLCommandBuffer> cmdbuf,
+    const void *W, const void *scales, const void *biases,
+    id<MTLBuffer> in_buf, id<MTLBuffer> out_buf,
+    uint32_t out_dim, uint32_t in_dim, uint32_t group_size
+) {
+    NSUInteger w_off = (NSUInteger)((const char *)W      - (const char *)[ctx->wf_buf contents]);
+    NSUInteger s_off = (NSUInteger)((const char *)scales  - (const char *)[ctx->wf_buf contents]);
+    NSUInteger b_off = (NSUInteger)((const char *)biases  - (const char *)[ctx->wf_buf contents]);
+
+    id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+    int use_v3 = (in_dim <= 4096);
+    [enc setComputePipelineState: use_v3 ? ctx->matvec_v3 : ctx->matvec_fast];
+    [enc setBuffer:ctx->wf_buf offset:w_off atIndex:0];
+    [enc setBuffer:ctx->wf_buf offset:s_off atIndex:1];
+    [enc setBuffer:ctx->wf_buf offset:b_off atIndex:2];
+    [enc setBuffer:in_buf      offset:0     atIndex:3];
+    [enc setBuffer:out_buf     offset:0     atIndex:4];
+    [enc setBytes:&out_dim     length:4     atIndex:5];
+    [enc setBytes:&in_dim      length:4     atIndex:6];
+    [enc setBytes:&group_size  length:4     atIndex:7];
+
+    if (use_v3) {
+        uint32_t num_tgs = (out_dim + 7) / 8;
+        [enc dispatchThreadgroups:MTLSizeMake(num_tgs, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    } else {
+        [enc dispatchThreadgroups:MTLSizeMake(out_dim, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+    }
+    [enc endEncoding];
+}
+
+// Encode one expert forward using multi-expert slot k.
+// Expert data must already be in buf_multi_expert_data[k].
+// Input must already be in buf_multi_expert_input.
+static void gpu_encode_expert_forward_slot(
+    MetalCtx *ctx,
+    id<MTLCommandBuffer> cmdbuf,
+    int k  // slot index
+) {
+    NSUInteger gate_w_off = 0;
+    NSUInteger gate_s_off = 2097152;
+    NSUInteger gate_b_off = 2228224;
+    NSUInteger up_w_off   = 2359296;
+    NSUInteger up_s_off   = 4456448;
+    NSUInteger up_b_off   = 4587520;
+    NSUInteger down_w_off = 4718592;
+    NSUInteger down_s_off = 6815744;
+    NSUInteger down_b_off = 6946816;
+
+    uint32_t gate_up_out = MOE_INTERMEDIATE;
+    uint32_t gate_up_in  = HIDDEN_DIM;
+    uint32_t down_out    = HIDDEN_DIM;
+    uint32_t down_in     = MOE_INTERMEDIATE;
+    uint32_t gs          = GROUP_SIZE;
+
+    // gate_proj: data[k] -> gate[k]
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->matvec_v3];
+        [enc setBuffer:ctx->buf_multi_expert_data[k]  offset:gate_w_off  atIndex:0];
+        [enc setBuffer:ctx->buf_multi_expert_data[k]  offset:gate_s_off  atIndex:1];
+        [enc setBuffer:ctx->buf_multi_expert_data[k]  offset:gate_b_off  atIndex:2];
+        [enc setBuffer:ctx->buf_multi_expert_input     offset:0           atIndex:3];
+        [enc setBuffer:ctx->buf_multi_expert_gate[k]   offset:0           atIndex:4];
+        [enc setBytes:&gate_up_out length:4 atIndex:5];
+        [enc setBytes:&gate_up_in  length:4 atIndex:6];
+        [enc setBytes:&gs          length:4 atIndex:7];
+        uint32_t num_tgs = (gate_up_out + 7) / 8;
+        [enc dispatchThreadgroups:MTLSizeMake(num_tgs, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [enc endEncoding];
+    }
+    // up_proj: data[k] -> up[k]
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->matvec_v3];
+        [enc setBuffer:ctx->buf_multi_expert_data[k]  offset:up_w_off  atIndex:0];
+        [enc setBuffer:ctx->buf_multi_expert_data[k]  offset:up_s_off  atIndex:1];
+        [enc setBuffer:ctx->buf_multi_expert_data[k]  offset:up_b_off  atIndex:2];
+        [enc setBuffer:ctx->buf_multi_expert_input     offset:0          atIndex:3];
+        [enc setBuffer:ctx->buf_multi_expert_up[k]     offset:0          atIndex:4];
+        [enc setBytes:&gate_up_out length:4 atIndex:5];
+        [enc setBytes:&gate_up_in  length:4 atIndex:6];
+        [enc setBytes:&gs          length:4 atIndex:7];
+        uint32_t num_tgs = (gate_up_out + 7) / 8;
+        [enc dispatchThreadgroups:MTLSizeMake(num_tgs, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [enc endEncoding];
+    }
+    // SwiGLU: gate[k], up[k] -> act[k]
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->swiglu];
+        [enc setBuffer:ctx->buf_multi_expert_gate[k] offset:0 atIndex:0];
+        [enc setBuffer:ctx->buf_multi_expert_up[k]   offset:0 atIndex:1];
+        [enc setBuffer:ctx->buf_multi_expert_act[k]  offset:0 atIndex:2];
+        [enc setBytes:&gate_up_out length:4 atIndex:3];
+        uint32_t swiglu_tgs = (gate_up_out + 255) / 256;
+        [enc dispatchThreadgroups:MTLSizeMake(swiglu_tgs, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [enc endEncoding];
+    }
+    // down_proj: act[k] -> out[k]
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->matvec_v3];
+        [enc setBuffer:ctx->buf_multi_expert_data[k] offset:down_w_off  atIndex:0];
+        [enc setBuffer:ctx->buf_multi_expert_data[k] offset:down_s_off  atIndex:1];
+        [enc setBuffer:ctx->buf_multi_expert_data[k] offset:down_b_off  atIndex:2];
+        [enc setBuffer:ctx->buf_multi_expert_act[k]  offset:0           atIndex:3];
+        [enc setBuffer:ctx->buf_multi_expert_out[k]  offset:0           atIndex:4];
+        [enc setBytes:&down_out length:4 atIndex:5];
+        [enc setBytes:&down_in  length:4 atIndex:6];
+        [enc setBytes:&gs       length:4 atIndex:7];
+        uint32_t num_tgs = (down_out + 7) / 8;
+        [enc dispatchThreadgroups:MTLSizeMake(num_tgs, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [enc endEncoding];
+    }
+}
+
+// Encode one expert forward (gate+up+swiglu+down) into cmdbuf.
+// Expert data must already be in buf_expert_data.
+// Input must already be in buf_expert_input.
+__attribute__((unused))
+static void gpu_encode_expert_forward(
+    MetalCtx *ctx,
+    id<MTLCommandBuffer> cmdbuf
+) {
+    NSUInteger gate_w_off = 0;
+    NSUInteger gate_s_off = 2097152;
+    NSUInteger gate_b_off = 2228224;
+    NSUInteger up_w_off   = 2359296;
+    NSUInteger up_s_off   = 4456448;
+    NSUInteger up_b_off   = 4587520;
+    NSUInteger down_w_off = 4718592;
+    NSUInteger down_s_off = 6815744;
+    NSUInteger down_b_off = 6946816;
+
+    uint32_t gate_up_out = MOE_INTERMEDIATE;
+    uint32_t gate_up_in  = HIDDEN_DIM;
+    uint32_t down_out    = HIDDEN_DIM;
+    uint32_t down_in     = MOE_INTERMEDIATE;
+    uint32_t gs          = GROUP_SIZE;
+
+    // gate_proj
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->matvec_v3];
+        [enc setBuffer:ctx->buf_expert_data  offset:gate_w_off  atIndex:0];
+        [enc setBuffer:ctx->buf_expert_data  offset:gate_s_off  atIndex:1];
+        [enc setBuffer:ctx->buf_expert_data  offset:gate_b_off  atIndex:2];
+        [enc setBuffer:ctx->buf_expert_input offset:0           atIndex:3];
+        [enc setBuffer:ctx->buf_expert_gate  offset:0           atIndex:4];
+        [enc setBytes:&gate_up_out length:4 atIndex:5];
+        [enc setBytes:&gate_up_in  length:4 atIndex:6];
+        [enc setBytes:&gs          length:4 atIndex:7];
+        uint32_t num_tgs = (gate_up_out + 7) / 8;
+        [enc dispatchThreadgroups:MTLSizeMake(num_tgs, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [enc endEncoding];
+    }
+    // up_proj
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->matvec_v3];
+        [enc setBuffer:ctx->buf_expert_data  offset:up_w_off  atIndex:0];
+        [enc setBuffer:ctx->buf_expert_data  offset:up_s_off  atIndex:1];
+        [enc setBuffer:ctx->buf_expert_data  offset:up_b_off  atIndex:2];
+        [enc setBuffer:ctx->buf_expert_input offset:0          atIndex:3];
+        [enc setBuffer:ctx->buf_expert_up    offset:0          atIndex:4];
+        [enc setBytes:&gate_up_out length:4 atIndex:5];
+        [enc setBytes:&gate_up_in  length:4 atIndex:6];
+        [enc setBytes:&gs          length:4 atIndex:7];
+        uint32_t num_tgs = (gate_up_out + 7) / 8;
+        [enc dispatchThreadgroups:MTLSizeMake(num_tgs, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [enc endEncoding];
+    }
+    // SwiGLU
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->swiglu];
+        [enc setBuffer:ctx->buf_expert_gate offset:0 atIndex:0];
+        [enc setBuffer:ctx->buf_expert_up   offset:0 atIndex:1];
+        [enc setBuffer:ctx->buf_expert_act  offset:0 atIndex:2];
+        [enc setBytes:&gate_up_out length:4 atIndex:3];
+        uint32_t swiglu_tgs = (gate_up_out + 255) / 256;
+        [enc dispatchThreadgroups:MTLSizeMake(swiglu_tgs, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [enc endEncoding];
+    }
+    // down_proj
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->matvec_v3];
+        [enc setBuffer:ctx->buf_expert_data offset:down_w_off  atIndex:0];
+        [enc setBuffer:ctx->buf_expert_data offset:down_s_off  atIndex:1];
+        [enc setBuffer:ctx->buf_expert_data offset:down_b_off  atIndex:2];
+        [enc setBuffer:ctx->buf_expert_act  offset:0           atIndex:3];
+        [enc setBuffer:ctx->buf_expert_out  offset:0           atIndex:4];
+        [enc setBytes:&down_out length:4 atIndex:5];
+        [enc setBytes:&down_in  length:4 atIndex:6];
+        [enc setBytes:&gs       length:4 atIndex:7];
+        uint32_t num_tgs = (down_out + 7) / 8;
+        [enc dispatchThreadgroups:MTLSizeMake(num_tgs, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        [enc endEncoding];
+    }
+}
+
 // Batched wrapper: takes N matmul specs sharing the same input, dispatches
 // via GPU batch if available, otherwise falls back to CPU.
 static void fast_batch_matvec(
@@ -850,6 +1175,7 @@ static void fast_batch_matvec(
 
 // expert_data_already_in_buffer: if true, expert data is already in buf_expert_data
 //   (pread'd directly into it), skip the copy.
+__attribute__((unused))
 static void gpu_expert_forward(
     MetalCtx *ctx,
     const void *expert_data,     // EXPERT_SIZE bytes (may be buf_expert_data contents)
@@ -1070,6 +1396,7 @@ static float vec_rms(const float *v, int n) {
     return sqrtf(sum / n);
 }
 
+__attribute__((unused))
 static void full_attention_forward(
     WeightFile *wf,
     int layer_idx,
@@ -1322,6 +1649,7 @@ static void cpu_rms_norm_gated(const float *x, const float *z, const uint16_t *w
 
 static int linear_attn_bypass = 0;  // set to 1 to skip linear attention (identity)
 
+__attribute__((unused))
 static void linear_attention_forward(
     WeightFile *wf,
     int layer_idx,
@@ -1585,6 +1913,7 @@ static void linear_attention_forward(
 
 static int moe_debug_count = 0;
 
+__attribute__((unused))
 static void moe_forward(
     WeightFile *wf,
     int layer_idx,
@@ -1879,6 +2208,658 @@ static void lm_head_forward(WeightFile *wf, const float *hidden, float *logits) 
 }
 
 // ============================================================================
+// Fused layer forward: 2 command buffers per layer instead of 5-8
+//
+// CMD1: attention projections + post_attn_norm (via batch_out) + routing gate
+//       + shared expert gate/up + shared_expert_gate
+// CPU:  attention compute (RoPE/softmax/delta-net) + softmax + top-K + pread
+// CMD2: routed expert forwards + shared expert SwiGLU + shared expert down_proj
+//
+// This eliminates ~3-6 command buffer round-trips per layer.
+// ============================================================================
+
+static void fused_layer_forward(
+    WeightFile *wf,
+    int layer_idx,
+    float *hidden,           // [HIDDEN_DIM] in/out
+    KVCache *kv,             // non-NULL for full attention layers
+    LinearAttnState *la_state, // non-NULL for linear attention layers
+    int pos,                 // position for RoPE
+    int K,                   // number of active experts
+    int packed_fd            // fd for packed expert file
+) {
+    int is_full = (kv != NULL);
+    char name[256];
+
+    // =====================================================================
+    // PHASE 1: Build & submit CMD1
+    //   Attention projections + post_attn_norm + MoE routing + shared expert
+    // =====================================================================
+
+    float *normed = malloc(HIDDEN_DIM * sizeof(float));
+    float *residual = malloc(HIDDEN_DIM * sizeof(float));
+    cpu_vec_copy(residual, hidden, HIDDEN_DIM);
+
+    // ---- Input LayerNorm (CPU — fast, ~0.01ms) ----
+    snprintf(name, sizeof(name), "model.layers.%d.input_layernorm.weight", layer_idx);
+    uint16_t *norm_w = get_tensor_ptr(wf, name);
+    cpu_rms_norm(hidden, norm_w, normed, HIDDEN_DIM, RMS_NORM_EPS);
+
+    // ---- Prepare attention projection specs ----
+    // These will be encoded into CMD1 alongside MoE routing.
+    // We use batch_out slots 0-4 for attention, 5-7 for MoE.
+
+    int num_attn_specs = 0;
+    BatchMatvecSpec attn_specs[5];  // max 5 attention projections
+
+    // Attention projection pointers (set below, used after CMD1)
+    float *q_proj_out = NULL, *k_out = NULL, *v_out = NULL;
+    float *qkv_out = NULL, *z_out = NULL, *beta_out = NULL, *alpha_out = NULL;
+
+    if (is_full) {
+        // Full attention: Q, K, V projections (3 matmuls)
+        int q_proj_dim = NUM_ATTN_HEADS * HEAD_DIM * 2;
+        int kv_dim = NUM_KV_HEADS * HEAD_DIM;
+
+        q_proj_out = calloc(q_proj_dim, sizeof(float));
+        k_out = calloc(kv_dim, sizeof(float));
+        v_out = calloc(kv_dim, sizeof(float));
+
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.q_proj.weight", layer_idx);
+        uint32_t *qw = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.q_proj.scales", layer_idx);
+        uint16_t *qs = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.q_proj.biases", layer_idx);
+        uint16_t *qb = get_tensor_ptr(wf, name);
+
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.k_proj.weight", layer_idx);
+        uint32_t *kw = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.k_proj.scales", layer_idx);
+        uint16_t *ks = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.k_proj.biases", layer_idx);
+        uint16_t *kb = get_tensor_ptr(wf, name);
+
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.v_proj.weight", layer_idx);
+        uint32_t *vw = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.v_proj.scales", layer_idx);
+        uint16_t *vs = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.v_proj.biases", layer_idx);
+        uint16_t *vb = get_tensor_ptr(wf, name);
+
+        if (qw && qs && qb && kw && ks && kb && vw && vs && vb) {
+            attn_specs[0] = (BatchMatvecSpec){ qw, qs, qb, q_proj_out, (uint32_t)q_proj_dim, HIDDEN_DIM, GROUP_SIZE, 0 };
+            attn_specs[1] = (BatchMatvecSpec){ kw, ks, kb, k_out,      (uint32_t)kv_dim,     HIDDEN_DIM, GROUP_SIZE, 1 };
+            attn_specs[2] = (BatchMatvecSpec){ vw, vs, vb, v_out,      (uint32_t)kv_dim,     HIDDEN_DIM, GROUP_SIZE, 2 };
+            num_attn_specs = 3;
+        }
+    } else {
+        // Linear attention: QKV, Z, beta, alpha projections (4 matmuls)
+        int qkv_dim = LINEAR_CONV_DIM;
+        int z_dim = LINEAR_TOTAL_VALUE;
+
+        qkv_out = calloc(qkv_dim, sizeof(float));
+        z_out = calloc(z_dim, sizeof(float));
+        beta_out = calloc(LINEAR_NUM_V_HEADS, sizeof(float));
+        alpha_out = calloc(LINEAR_NUM_V_HEADS, sizeof(float));
+
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_qkv.weight", layer_idx);
+        uint32_t *qkv_w = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_qkv.scales", layer_idx);
+        uint16_t *qkv_s = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_qkv.biases", layer_idx);
+        uint16_t *qkv_b = get_tensor_ptr(wf, name);
+
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_z.weight", layer_idx);
+        uint32_t *z_w = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_z.scales", layer_idx);
+        uint16_t *z_s = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_z.biases", layer_idx);
+        uint16_t *z_b = get_tensor_ptr(wf, name);
+
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_b.weight", layer_idx);
+        uint32_t *b_w = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_b.scales", layer_idx);
+        uint16_t *b_s = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_b.biases", layer_idx);
+        uint16_t *b_b = get_tensor_ptr(wf, name);
+
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_a.weight", layer_idx);
+        uint32_t *a_w = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_a.scales", layer_idx);
+        uint16_t *a_s = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.linear_attn.in_proj_a.biases", layer_idx);
+        uint16_t *a_b = get_tensor_ptr(wf, name);
+
+        if (qkv_w && qkv_s && qkv_b && z_w && z_s && z_b &&
+            b_w && b_s && b_b && a_w && a_s && a_b) {
+            attn_specs[0] = (BatchMatvecSpec){ qkv_w, qkv_s, qkv_b, qkv_out,   (uint32_t)qkv_dim,            HIDDEN_DIM, GROUP_SIZE, 0 };
+            attn_specs[1] = (BatchMatvecSpec){ z_w,   z_s,   z_b,   z_out,      (uint32_t)z_dim,              HIDDEN_DIM, GROUP_SIZE, 1 };
+            attn_specs[2] = (BatchMatvecSpec){ b_w,   b_s,   b_b,   beta_out,   (uint32_t)LINEAR_NUM_V_HEADS, HIDDEN_DIM, GROUP_SIZE, 2 };
+            attn_specs[3] = (BatchMatvecSpec){ a_w,   a_s,   a_b,   alpha_out,  (uint32_t)LINEAR_NUM_V_HEADS, HIDDEN_DIM, GROUP_SIZE, 3 };
+            num_attn_specs = 4;
+        }
+    }
+
+    // Per-layer cmd buffer structure:
+    //   CMD1: attention input projections (3-4 dispatches, 1 commit)
+    //   CPU:  attention compute (RoPE/softmax/delta-net) + o_proj
+    //   CMD2: routing + shared expert gate/up (4 dispatches, 1 commit)
+    //   CPU:  softmax + topK + pread all K experts
+    //   CMD3: all K expert forwards + shared SwiGLU + shared down (1 commit)
+    //
+    // Total: 3 cmd buffers per layer (was 4+K=8 for K=4).
+    // With K=4, saves 5 cmd buffers per layer = 300 total.
+
+    // ---- Build and submit CMD1: attention projections only ----
+    if (g_metal && g_metal->wf_buf && num_attn_specs > 0) {
+        memcpy([g_metal->buf_input contents], normed, HIDDEN_DIM * sizeof(float));
+        id<MTLCommandBuffer> cmd1 = [g_metal->queue commandBuffer];
+        gpu_encode_batch_matvec(g_metal, cmd1, attn_specs, num_attn_specs);
+        [cmd1 commit];
+        [cmd1 waitUntilCompleted];
+        gpu_flush_batch_results(g_metal, attn_specs, num_attn_specs);
+    } else {
+        // CPU fallback
+        for (int i = 0; i < num_attn_specs; i++) {
+            BatchMatvecSpec *s = &attn_specs[i];
+            cpu_dequant_matvec(s->W, s->scales, s->biases, normed, s->out_cpu,
+                               s->out_dim, s->in_dim, s->group_size);
+        }
+    }
+
+    // =====================================================================
+    // PHASE 2: CPU attention compute
+    // =====================================================================
+
+    float *attn_projected = calloc(HIDDEN_DIM, sizeof(float));
+
+    if (is_full) {
+        // ---- Full attention CPU compute ----
+        int q_proj_dim = NUM_ATTN_HEADS * HEAD_DIM * 2;
+        int q_dim = NUM_ATTN_HEADS * HEAD_DIM;
+        int kv_dim = NUM_KV_HEADS * HEAD_DIM;
+        (void)q_proj_dim;
+
+        // Split q_proj_out into queries and gate
+        float *q = calloc(q_dim, sizeof(float));
+        float *q_gate = calloc(q_dim, sizeof(float));
+        for (int h = 0; h < NUM_ATTN_HEADS; h++) {
+            float *src = q_proj_out + h * (2 * HEAD_DIM);
+            memcpy(q + h * HEAD_DIM, src, HEAD_DIM * sizeof(float));
+            memcpy(q_gate + h * HEAD_DIM, src + HEAD_DIM, HEAD_DIM * sizeof(float));
+        }
+
+        // Q/K RMSNorm
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.q_norm.weight", layer_idx);
+        uint16_t *qnorm_w = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.k_norm.weight", layer_idx);
+        uint16_t *knorm_w = get_tensor_ptr(wf, name);
+        if (qnorm_w) {
+            for (int h = 0; h < NUM_ATTN_HEADS; h++) {
+                float *qh = q + h * HEAD_DIM;
+                float sum_sq = 0.0f;
+                for (int i = 0; i < HEAD_DIM; i++) sum_sq += qh[i] * qh[i];
+                float inv_rms = 1.0f / sqrtf(sum_sq / HEAD_DIM + RMS_NORM_EPS);
+                for (int i = 0; i < HEAD_DIM; i++) qh[i] = qh[i] * inv_rms * bf16_to_f32(qnorm_w[i]);
+            }
+        }
+        if (knorm_w) {
+            for (int h = 0; h < NUM_KV_HEADS; h++) {
+                float *kh = k_out + h * HEAD_DIM;
+                float sum_sq = 0.0f;
+                for (int i = 0; i < HEAD_DIM; i++) sum_sq += kh[i] * kh[i];
+                float inv_rms = 1.0f / sqrtf(sum_sq / HEAD_DIM + RMS_NORM_EPS);
+                for (int i = 0; i < HEAD_DIM; i++) kh[i] = kh[i] * inv_rms * bf16_to_f32(knorm_w[i]);
+            }
+        }
+
+        // RoPE
+        apply_rotary_emb(q, k_out, pos, NUM_ATTN_HEADS, NUM_KV_HEADS, HEAD_DIM, ROTARY_DIM);
+
+        // Update KV cache
+        int cache_pos = kv->len;
+        memcpy(kv->k_cache + cache_pos * kv_dim, k_out, kv_dim * sizeof(float));
+        memcpy(kv->v_cache + cache_pos * kv_dim, v_out, kv_dim * sizeof(float));
+        kv->len++;
+
+        // Scaled dot-product attention (GQA)
+        int heads_per_kv = NUM_ATTN_HEADS / NUM_KV_HEADS;
+        float scale = 1.0f / sqrtf((float)HEAD_DIM);
+        float *attn_out = calloc(q_dim, sizeof(float));
+
+        for (int h = 0; h < NUM_ATTN_HEADS; h++) {
+            int kv_h = h / heads_per_kv;
+            float *qh = q + h * HEAD_DIM;
+            float *scores = malloc(kv->len * sizeof(float));
+            for (int p = 0; p < kv->len; p++) {
+                float *kp = kv->k_cache + p * kv_dim + kv_h * HEAD_DIM;
+                float dot = 0.0f;
+                for (int d = 0; d < HEAD_DIM; d++) dot += qh[d] * kp[d];
+                scores[p] = dot * scale;
+            }
+            cpu_softmax(scores, kv->len);
+            float *oh = attn_out + h * HEAD_DIM;
+            for (int p = 0; p < kv->len; p++) {
+                float *vp = kv->v_cache + p * kv_dim + kv_h * HEAD_DIM;
+                for (int d = 0; d < HEAD_DIM; d++) oh[d] += scores[p] * vp[d];
+            }
+            free(scores);
+        }
+
+        // Apply sigmoid gate
+        for (int i = 0; i < q_dim; i++) {
+            float g = 1.0f / (1.0f + expf(-q_gate[i]));
+            attn_out[i] *= g;
+        }
+
+        // O projection — GPU (single dispatch cmd buffer)
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.o_proj.weight", layer_idx);
+        uint32_t *ow = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.o_proj.scales", layer_idx);
+        uint16_t *os_ptr = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.self_attn.o_proj.biases", layer_idx);
+        uint16_t *ob = get_tensor_ptr(wf, name);
+        if (ow && os_ptr && ob) {
+            fast_dequant_matvec(ow, os_ptr, ob, attn_out, attn_projected, HIDDEN_DIM, q_dim, GROUP_SIZE);
+        }
+
+        free(q);
+        free(q_gate);
+        free(attn_out);
+        free(q_proj_out);
+        free(k_out);
+        free(v_out);
+    } else {
+        // ---- Linear attention CPU compute ----
+        if (!linear_attn_bypass) {
+            int qkv_dim = LINEAR_CONV_DIM;
+
+            // Conv1d step
+            snprintf(name, sizeof(name), "model.layers.%d.linear_attn.conv1d.weight", layer_idx);
+            uint16_t *conv_w = get_tensor_ptr(wf, name);
+            float *conv_out = calloc(qkv_dim, sizeof(float));
+            if (conv_w) {
+                cpu_conv1d_step(la_state->conv_state, qkv_out, conv_w, conv_out,
+                                qkv_dim, CONV_KERNEL_SIZE);
+            }
+            // Update conv state
+            memmove(la_state->conv_state, la_state->conv_state + qkv_dim,
+                    (CONV_KERNEL_SIZE - 2) * qkv_dim * sizeof(float));
+            memcpy(la_state->conv_state + (CONV_KERNEL_SIZE - 2) * qkv_dim, qkv_out,
+                   qkv_dim * sizeof(float));
+
+            // Split into q, k, v
+            float *lin_q = conv_out;
+            float *lin_k = conv_out + LINEAR_TOTAL_KEY;
+            float *lin_v = conv_out + 2 * LINEAR_TOTAL_KEY;
+
+            // RMS normalize q and k
+            float inv_scale = 1.0f / sqrtf((float)LINEAR_KEY_DIM);
+            for (int h = 0; h < LINEAR_NUM_K_HEADS; h++) {
+                float *qh = lin_q + h * LINEAR_KEY_DIM;
+                cpu_rms_norm_bare(qh, qh, LINEAR_KEY_DIM, 1e-6f);
+                float q_scale = inv_scale * inv_scale;
+                for (int d = 0; d < LINEAR_KEY_DIM; d++) qh[d] *= q_scale;
+            }
+            for (int h = 0; h < LINEAR_NUM_K_HEADS; h++) {
+                float *kh = lin_k + h * LINEAR_KEY_DIM;
+                cpu_rms_norm_bare(kh, kh, LINEAR_KEY_DIM, 1e-6f);
+                for (int d = 0; d < LINEAR_KEY_DIM; d++) kh[d] *= inv_scale;
+            }
+
+            // Gated delta net recurrence
+            snprintf(name, sizeof(name), "model.layers.%d.linear_attn.A_log", layer_idx);
+            float *A_log = get_tensor_ptr(wf, name);
+            snprintf(name, sizeof(name), "model.layers.%d.linear_attn.dt_bias", layer_idx);
+            uint16_t *dt_bias_bf16 = get_tensor_ptr(wf, name);
+
+            float *out_values = calloc(LINEAR_TOTAL_VALUE, sizeof(float));
+            int k_heads_per_v = LINEAR_NUM_V_HEADS / LINEAR_NUM_K_HEADS;
+
+            float g_decay[LINEAR_NUM_V_HEADS];
+            float beta_gate_arr[LINEAR_NUM_V_HEADS];
+            for (int vh = 0; vh < LINEAR_NUM_V_HEADS; vh++) {
+                float a_val = alpha_out[vh];
+                float dt_b = dt_bias_bf16 ? bf16_to_f32(dt_bias_bf16[vh]) : 0.0f;
+                float A_val = A_log ? expf(A_log[vh]) : 1.0f;
+                float softplus_val = logf(1.0f + expf(a_val + dt_b));
+                g_decay[vh] = expf(-A_val * softplus_val);
+                beta_gate_arr[vh] = cpu_sigmoid(beta_out[vh]);
+            }
+
+            for (int vh = 0; vh < LINEAR_NUM_V_HEADS; vh++) {
+                int kh = vh / k_heads_per_v;
+                float g = g_decay[vh];
+                float b_gate = beta_gate_arr[vh];
+                float *S = la_state->ssm_state + vh * LINEAR_VALUE_DIM * LINEAR_KEY_DIM;
+                float *v_h = lin_v + vh * LINEAR_VALUE_DIM;
+                float *k_h = lin_k + kh * LINEAR_KEY_DIM;
+
+                for (int vi = 0; vi < LINEAR_VALUE_DIM; vi++) {
+                    for (int ki = 0; ki < LINEAR_KEY_DIM; ki++) {
+                        S[vi * LINEAR_KEY_DIM + ki] *= g;
+                    }
+                }
+                for (int vi = 0; vi < LINEAR_VALUE_DIM; vi++) {
+                    float kv_mem = 0.0f;
+                    for (int ki = 0; ki < LINEAR_KEY_DIM; ki++) {
+                        kv_mem += S[vi * LINEAR_KEY_DIM + ki] * k_h[ki];
+                    }
+                    float delta = (v_h[vi] - kv_mem) * b_gate;
+                    for (int ki = 0; ki < LINEAR_KEY_DIM; ki++) {
+                        S[vi * LINEAR_KEY_DIM + ki] += k_h[ki] * delta;
+                    }
+                }
+
+                float *q_h = lin_q + kh * LINEAR_KEY_DIM;
+                float *o_h = out_values + vh * LINEAR_VALUE_DIM;
+                for (int vi = 0; vi < LINEAR_VALUE_DIM; vi++) {
+                    float sum = 0.0f;
+                    for (int ki = 0; ki < LINEAR_KEY_DIM; ki++) {
+                        sum += S[vi * LINEAR_KEY_DIM + ki] * q_h[ki];
+                    }
+                    o_h[vi] = sum;
+                }
+            }
+
+            // RMSNormGated
+            snprintf(name, sizeof(name), "model.layers.%d.linear_attn.norm.weight", layer_idx);
+            uint16_t *gated_norm_w = get_tensor_ptr(wf, name);
+            float *gated_out = calloc(LINEAR_TOTAL_VALUE, sizeof(float));
+            for (int vh = 0; vh < LINEAR_NUM_V_HEADS; vh++) {
+                float *oh = out_values + vh * LINEAR_VALUE_DIM;
+                float *zh = z_out + vh * LINEAR_VALUE_DIM;
+                float *gh = gated_out + vh * LINEAR_VALUE_DIM;
+                if (gated_norm_w) {
+                    cpu_rms_norm_gated(oh, zh, gated_norm_w, gh, LINEAR_VALUE_DIM, RMS_NORM_EPS);
+                } else {
+                    memcpy(gh, oh, LINEAR_VALUE_DIM * sizeof(float));
+                }
+            }
+
+            // Output projection — GPU (single dispatch cmd buffer)
+            snprintf(name, sizeof(name), "model.layers.%d.linear_attn.out_proj.weight", layer_idx);
+            uint32_t *out_w = get_tensor_ptr(wf, name);
+            snprintf(name, sizeof(name), "model.layers.%d.linear_attn.out_proj.scales", layer_idx);
+            uint16_t *out_s = get_tensor_ptr(wf, name);
+            snprintf(name, sizeof(name), "model.layers.%d.linear_attn.out_proj.biases", layer_idx);
+            uint16_t *out_b = get_tensor_ptr(wf, name);
+            if (out_w && out_s && out_b) {
+                fast_dequant_matvec(out_w, out_s, out_b, gated_out, attn_projected,
+                                   HIDDEN_DIM, LINEAR_TOTAL_VALUE, GROUP_SIZE);
+            }
+
+            free(conv_out);
+            free(out_values);
+            free(gated_out);
+        }
+        // else: linear_attn_bypass — attn_projected stays zero
+
+        free(qkv_out);
+        free(z_out);
+        free(beta_out);
+        free(alpha_out);
+    }
+
+    // ---- Residual connection after attention ----
+    for (int i = 0; i < HIDDEN_DIM; i++) {
+        hidden[i] = residual[i] + attn_projected[i];
+    }
+    free(attn_projected);
+    free(normed);
+    free(residual);
+
+    // =====================================================================
+    // PHASE 3: MoE — CPU routing + shared projections, then GPU experts
+    // =====================================================================
+
+    float *h_post = malloc(HIDDEN_DIM * sizeof(float));
+    float *h_mid = malloc(HIDDEN_DIM * sizeof(float));
+    cpu_vec_copy(h_mid, hidden, HIDDEN_DIM);
+
+    // Post-attention LayerNorm (CPU)
+    snprintf(name, sizeof(name), "model.layers.%d.post_attention_layernorm.weight", layer_idx);
+    uint16_t *post_norm_w = get_tensor_ptr(wf, name);
+    cpu_rms_norm(hidden, post_norm_w, h_post, HIDDEN_DIM, RMS_NORM_EPS);
+
+    // ---- Batch routing gate + shared expert gate/up + shared_expert_gate (GPU, 4 dispatches, 1 commit) ----
+    float *gate_scores = calloc(NUM_EXPERTS, sizeof(float));
+    float *shared_gate = calloc(SHARED_INTERMEDIATE, sizeof(float));
+    float *shared_up = calloc(SHARED_INTERMEDIATE, sizeof(float));
+    float shared_gate_score = 0.0f;
+
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.gate.weight", layer_idx);
+    uint32_t *gate_w = get_tensor_ptr(wf, name);
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.gate.scales", layer_idx);
+    uint16_t *gate_s = get_tensor_ptr(wf, name);
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.gate.biases", layer_idx);
+    uint16_t *gate_b = get_tensor_ptr(wf, name);
+
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.gate_proj.weight", layer_idx);
+    uint32_t *sgw = get_tensor_ptr(wf, name);
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.gate_proj.scales", layer_idx);
+    uint16_t *sgs = get_tensor_ptr(wf, name);
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.gate_proj.biases", layer_idx);
+    uint16_t *sgb = get_tensor_ptr(wf, name);
+
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.up_proj.weight", layer_idx);
+    uint32_t *suw = get_tensor_ptr(wf, name);
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.up_proj.scales", layer_idx);
+    uint16_t *sus = get_tensor_ptr(wf, name);
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.up_proj.biases", layer_idx);
+    uint16_t *sub = get_tensor_ptr(wf, name);
+
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert_gate.weight", layer_idx);
+    uint32_t *seg_w = get_tensor_ptr(wf, name);
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert_gate.scales", layer_idx);
+    uint16_t *seg_s = get_tensor_ptr(wf, name);
+    snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert_gate.biases", layer_idx);
+    uint16_t *seg_b = get_tensor_ptr(wf, name);
+
+    if (gate_w && gate_s && gate_b && sgw && sgs && sgb &&
+        suw && sus && sub && seg_w && seg_s && seg_b) {
+        BatchMatvecSpec moe_specs[4] = {
+            { gate_w, gate_s, gate_b, gate_scores,        (uint32_t)NUM_EXPERTS,        HIDDEN_DIM, GROUP_SIZE, 0 },
+            { sgw,    sgs,    sgb,    shared_gate,         (uint32_t)SHARED_INTERMEDIATE, HIDDEN_DIM, GROUP_SIZE, 1 },
+            { suw,    sus,    sub,    shared_up,           (uint32_t)SHARED_INTERMEDIATE, HIDDEN_DIM, GROUP_SIZE, 2 },
+            { seg_w,  seg_s,  seg_b,  &shared_gate_score,  1,                            HIDDEN_DIM, GROUP_SIZE, 3 },
+        };
+        fast_batch_matvec(h_post, HIDDEN_DIM, moe_specs, 4);
+    }
+
+    // ---- Softmax + top-K (CPU) ----
+    cpu_softmax(gate_scores, NUM_EXPERTS);
+    int expert_indices[64];
+    float expert_weights[64];
+    cpu_topk(gate_scores, NUM_EXPERTS, K, expert_indices, expert_weights);
+    cpu_normalize_weights(expert_weights, K);
+
+    // ---- Pread ALL K expert weight chunks, then encode ALL into ONE cmd buffer ----
+    float *moe_out = calloc(HIDDEN_DIM, sizeof(float));
+    float *shared_out = calloc(HIDDEN_DIM, sizeof(float));
+
+    int actual_K = (K > MAX_K) ? MAX_K : K;  // clamp to available slots
+
+    if (packed_fd >= 0 && g_metal && g_metal->buf_multi_expert_data[0]) {
+        // GPU multi-expert path:
+        // 1. pread all K experts into independent Metal buffers
+        // 2. Copy h_post into shared input buffer
+        // 3. Encode all K expert forwards + shared expert into ONE cmd buffer
+        // 4. Single commit+wait
+        // 5. Read back all results and accumulate
+
+        // Step 1: pread all experts (sequential I/O, ~1ms per expert)
+        int valid[MAX_K];
+        for (int k = 0; k < actual_K; k++) {
+            int eidx = expert_indices[k];
+            off_t expert_offset = (off_t)eidx * EXPERT_SIZE;
+            void *dst = [g_metal->buf_multi_expert_data[k] contents];
+            ssize_t nread = pread(packed_fd, dst, EXPERT_SIZE, expert_offset);
+            valid[k] = (nread == EXPERT_SIZE);
+            if (!valid[k]) {
+                fprintf(stderr, "WARNING: layer %d expert %d pread: %zd/%d\n",
+                        layer_idx, eidx, nread, EXPERT_SIZE);
+            }
+        }
+
+        // Step 2: copy input
+        memcpy([g_metal->buf_multi_expert_input contents], h_post, HIDDEN_DIM * sizeof(float));
+
+        // Step 3: encode ALL experts + shared expert into ONE command buffer
+        id<MTLCommandBuffer> cmd_experts = [g_metal->queue commandBuffer];
+
+        for (int k = 0; k < actual_K; k++) {
+            if (!valid[k]) continue;
+            gpu_encode_expert_forward_slot(g_metal, cmd_experts, k);
+        }
+
+        // Also encode shared expert SwiGLU + down_proj in the same cmd buffer
+        memcpy([g_metal->buf_shared_gate contents], shared_gate,
+               SHARED_INTERMEDIATE * sizeof(float));
+        memcpy([g_metal->buf_shared_up contents], shared_up,
+               SHARED_INTERMEDIATE * sizeof(float));
+
+        // SwiGLU dispatch
+        {
+            id<MTLComputeCommandEncoder> enc = [cmd_experts computeCommandEncoder];
+            [enc setComputePipelineState:g_metal->swiglu];
+            [enc setBuffer:g_metal->buf_shared_gate offset:0 atIndex:0];
+            [enc setBuffer:g_metal->buf_shared_up   offset:0 atIndex:1];
+            [enc setBuffer:g_metal->buf_shared_act  offset:0 atIndex:2];
+            uint32_t dim = SHARED_INTERMEDIATE;
+            [enc setBytes:&dim length:4 atIndex:3];
+            uint32_t swiglu_tgs = (dim + 255) / 256;
+            [enc dispatchThreadgroups:MTLSizeMake(swiglu_tgs, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            [enc endEncoding];
+        }
+
+        // Shared down_proj dispatch
+        snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.down_proj.weight", layer_idx);
+        uint32_t *sdw = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.down_proj.scales", layer_idx);
+        uint16_t *sds = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.down_proj.biases", layer_idx);
+        uint16_t *sdb = get_tensor_ptr(wf, name);
+        if (sdw && sds && sdb) {
+            gpu_encode_dequant_matvec_with_io_bufs(
+                g_metal, cmd_experts, sdw, sds, sdb,
+                g_metal->buf_shared_act, g_metal->buf_shared_out,
+                HIDDEN_DIM, SHARED_INTERMEDIATE, GROUP_SIZE);
+        }
+
+        // Step 4: single commit+wait for all K experts + shared expert
+        [cmd_experts commit];
+        [cmd_experts waitUntilCompleted];
+
+        // Step 5: read back and accumulate
+        for (int k = 0; k < actual_K; k++) {
+            if (!valid[k]) continue;
+            float *expert_result = (float *)[g_metal->buf_multi_expert_out[k] contents];
+            cpu_vec_madd(moe_out, expert_result, expert_weights[k], HIDDEN_DIM);
+        }
+
+        // Read shared expert result
+        memcpy(shared_out, [g_metal->buf_shared_out contents], HIDDEN_DIM * sizeof(float));
+
+    } else if (packed_fd >= 0) {
+        // CPU fallback for experts
+        float *expert_out_cpu = malloc(HIDDEN_DIM * sizeof(float));
+        for (int k = 0; k < K; k++) {
+            int eidx = expert_indices[k];
+            off_t expert_offset = (off_t)eidx * EXPERT_SIZE;
+            void *expert_data = malloc(EXPERT_SIZE);
+            ssize_t nread = pread(packed_fd, expert_data, EXPERT_SIZE, expert_offset);
+            if (nread != EXPERT_SIZE) {
+                fprintf(stderr, "WARNING: layer %d expert %d pread: %zd/%d\n",
+                        layer_idx, eidx, nread, EXPERT_SIZE);
+                free(expert_data);
+                continue;
+            }
+
+            uint32_t *gw = (uint32_t *)expert_data;
+            uint16_t *gs_p = (uint16_t *)((char *)expert_data + 2097152);
+            uint16_t *gb_p = (uint16_t *)((char *)expert_data + 2228224);
+            uint32_t *uw = (uint32_t *)((char *)expert_data + 2359296);
+            uint16_t *us_p = (uint16_t *)((char *)expert_data + 4456448);
+            uint16_t *ub_p = (uint16_t *)((char *)expert_data + 4587520);
+            uint32_t *dw = (uint32_t *)((char *)expert_data + 4718592);
+            uint16_t *ds_p = (uint16_t *)((char *)expert_data + 6815744);
+            uint16_t *db_p = (uint16_t *)((char *)expert_data + 6946816);
+
+            float *gate_proj_out = malloc(MOE_INTERMEDIATE * sizeof(float));
+            float *up_proj_out = malloc(MOE_INTERMEDIATE * sizeof(float));
+            float *act_out = malloc(MOE_INTERMEDIATE * sizeof(float));
+
+            cpu_dequant_matvec(gw, gs_p, gb_p, h_post, gate_proj_out,
+                               MOE_INTERMEDIATE, HIDDEN_DIM, GROUP_SIZE);
+            cpu_dequant_matvec(uw, us_p, ub_p, h_post, up_proj_out,
+                               MOE_INTERMEDIATE, HIDDEN_DIM, GROUP_SIZE);
+            cpu_swiglu(gate_proj_out, up_proj_out, act_out, MOE_INTERMEDIATE);
+            cpu_dequant_matvec(dw, ds_p, db_p, act_out, expert_out_cpu,
+                               HIDDEN_DIM, MOE_INTERMEDIATE, GROUP_SIZE);
+
+            free(gate_proj_out);
+            free(up_proj_out);
+            free(act_out);
+            free(expert_data);
+
+            cpu_vec_madd(moe_out, expert_out_cpu, expert_weights[k], HIDDEN_DIM);
+        }
+        free(expert_out_cpu);
+
+        // CPU shared expert
+        float *shared_act = calloc(SHARED_INTERMEDIATE, sizeof(float));
+        cpu_swiglu(shared_gate, shared_up, shared_act, SHARED_INTERMEDIATE);
+        snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.down_proj.weight", layer_idx);
+        uint32_t *sdw = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.down_proj.scales", layer_idx);
+        uint16_t *sds = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.down_proj.biases", layer_idx);
+        uint16_t *sdb = get_tensor_ptr(wf, name);
+        if (sdw && sds && sdb) {
+            cpu_dequant_matvec(sdw, sds, sdb, shared_act, shared_out,
+                               HIDDEN_DIM, SHARED_INTERMEDIATE, GROUP_SIZE);
+        }
+        free(shared_act);
+    } else {
+        // No experts available — still need shared expert
+        float *shared_act = calloc(SHARED_INTERMEDIATE, sizeof(float));
+        cpu_swiglu(shared_gate, shared_up, shared_act, SHARED_INTERMEDIATE);
+        snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.down_proj.weight", layer_idx);
+        uint32_t *sdw = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.down_proj.scales", layer_idx);
+        uint16_t *sds = get_tensor_ptr(wf, name);
+        snprintf(name, sizeof(name), "model.layers.%d.mlp.shared_expert.down_proj.biases", layer_idx);
+        uint16_t *sdb = get_tensor_ptr(wf, name);
+        if (sdw && sds && sdb) {
+            fast_dequant_matvec(sdw, sds, sdb, shared_act, shared_out,
+                                HIDDEN_DIM, SHARED_INTERMEDIATE, GROUP_SIZE);
+        }
+        free(shared_act);
+    }
+
+    // ---- Shared expert gate ----
+    float shared_weight = cpu_sigmoid(shared_gate_score);
+    for (int i = 0; i < HIDDEN_DIM; i++) {
+        shared_out[i] *= shared_weight;
+    }
+
+    // ---- Final combine: hidden = h_mid + moe_out + shared_out ----
+    for (int i = 0; i < HIDDEN_DIM; i++) {
+        hidden[i] = h_mid[i] + moe_out[i] + shared_out[i];
+    }
+
+    free(h_post);
+    free(h_mid);
+    free(gate_scores);
+    free(moe_out);
+    free(shared_out);
+    free(shared_gate);
+    free(shared_up);
+}
+
+// ============================================================================
 // Main inference loop
 // ============================================================================
 
@@ -2112,17 +3093,13 @@ int main(int argc, char **argv) {
             // ---- Embedding ----
             embed_lookup(wf, current_token, hidden);
 
-            // ---- 60 Transformer layers ----
+            // ---- 60 Transformer layers (fused: 1+K cmd buffers per layer) ----
             for (int layer = 0; layer < NUM_LAYERS; layer++) {
                 int is_full = ((layer + 1) % FULL_ATTN_INTERVAL == 0);
-
-                if (is_full) {
-                    full_attention_forward(wf, layer, hidden, kv_caches[layer], pos);
-                } else {
-                    linear_attention_forward(wf, layer, hidden, layer_states[layer]);
-                }
-
-                moe_forward(wf, layer, hidden, model_path, K, layer_fds[layer]);
+                fused_layer_forward(wf, layer, hidden,
+                                    is_full ? kv_caches[layer] : NULL,
+                                    is_full ? NULL : layer_states[layer],
+                                    pos, K, layer_fds[layer]);
             }
 
             pos++;
@@ -2195,17 +3172,13 @@ int main(int argc, char **argv) {
             // Embed the just-generated token (next iteration)
             embed_lookup(wf, next_token, hidden);
 
-            // Run 60 layers
+            // Run 60 layers (fused: 1+K cmd buffers per layer)
             for (int layer = 0; layer < NUM_LAYERS; layer++) {
                 int is_full = ((layer + 1) % FULL_ATTN_INTERVAL == 0);
-
-                if (is_full) {
-                    full_attention_forward(wf, layer, hidden, kv_caches[layer], pos);
-                } else {
-                    linear_attention_forward(wf, layer, hidden, layer_states[layer]);
-                }
-
-                moe_forward(wf, layer, hidden, model_path, K, layer_fds[layer]);
+                fused_layer_forward(wf, layer, hidden,
+                                    is_full ? kv_caches[layer] : NULL,
+                                    is_full ? NULL : layer_states[layer],
+                                    pos, K, layer_fds[layer]);
             }
             pos++;
 
