@@ -1,72 +1,16 @@
-commit	model	params_B	active_B	tok_sec	ttft_ms	mem_gb	status	description
-53881f9	Qwen3.5-122B-A10B-4bit	122.0	10.0	0.93	6236	3.7	keep	selective expert direct I/O - 10.3x over naive offload
-198f9f7	Qwen3.5-122B-A10B-4bit	122.0	10.0	1.13	5338	3.8	discard	LRU cache 768 entries - BROKEN OUTPUT (cache eviction race)
-757b156	Qwen3.5-122B-A10B-4bit	122.0	10.0	1.21	6682	3.9	discard	file handle cache + 1536 LRU - BROKEN OUTPUT (cache eviction race)
-0a9ef8c	Qwen3.5-122B-A10B-4bit	122.0	10.0	3.43	2970	10.0	discard	threaded I/O - BROKEN OUTPUT (cache eviction race, garbage text)
-2b54439	Qwen3.5-122B-A10B-4bit	122.0	10.0	3.88	2981	10.5	discard	batched clear - BROKEN OUTPUT (cache eviction race)
-9ac9aa8	Qwen3.5-122B-A10B-4bit	122.0	10.0	2.45	1953	10.5	keep	direct MoE + LRU fix - first correct output, 49% cache hit
-a0063cc	Qwen3.5-122B-A10B-4bit	122.0	10.0	2.54	2157	10.2	keep	coalesced expert reads - 3.7% speedup
-bb0286e	Qwen3.5-122B-A10B-4bit	122.0	10.0	2.67	2100	17.0	keep	3072 LRU entries - 70% hit rate, 5% speedup
-HEAD	Qwen3.5-35B-A3B-4bit	5.4	3.0	36.95	841	14.5	keep	35B baseline (fits DRAM) - reference for speculative decoding
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.47	6305	20.6	keep	397B MOONSHOT - 209GB model on 48GB laptop, 23% cache hit at 5 tokens
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.96	6008	21.4	keep	397B 20-token run - 0.96 tok/s, 44% cache hit, still climbing
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.03	11341	21.4	keep	397B 50-token steady state - 1.03 tok/s, 50% cache hit, plateau reached
-HEAD	Qwen3.5-122B-A10B-4bit	122.0	10.0	0.23	6114	10.8	discard	speculative decode (35B draft K=4) - 33% accept rate, 4.5x SLOWER than baseline
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.65	9611	20.8	discard	preloaded hot experts (profiled) - wrong routing, wasted cache space
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.18	4367	28.1	discard	LFU cache - same hit rate as LRU, scan overhead made it slower
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.32	4335	28.2	keep	28GB LRU cache - 61% hit rate, 28% speedup over 20GB baseline
-HEAD	Qwen3.5-122B-A10B-4bit	122.0	10.0	3.53	6318	25.8	keep	expanded 28GB cache (5274 entries) - 82% hit rate at 200tok, still climbing
-HEAD	Qwen3.5-122B-A10B-4bit	122.0	10.0	3.99	11308	25.8	keep	500tok steady state - 86% hit rate plateau, ~4.7 tok/s instantaneous
-573e190	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.47	12129	25.3	keep	PROFILING: I/O=434ms(64%), mx.eval=224ms(33%), SSD=3.5GB/s, GPU=3.7ms actual
-ee5858b	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.91	19688	25.3	discard	pread+F_NOCACHE - 1.8GB/s, SLOWER than mmap (bypassed page cache)
-ee5858b	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.45	11724	25.5	discard	pread+pagecache+8threads - ~4.1GB/s, GIL limits parallelism, matches mmap
-ee5858b	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.30	12429	28.2	discard	33GB cache - memory pressure abort at 9% free, can't fit working set
-HEAD	fast_expert_io.c	397.0	17.0	0.00	0	0	keep	C extension benchmark: 18.8 GB/s cold (8 pthreads, preadv, sorted reads)
-575e370	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.35	19007	26.2	discard	C extension integrated - memory contention with MLX, 2.6GB/s (worse than mmap)
-c4b2795	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.16	9008	26.0	keep	batch-experts 50tok - mx.eval 224→183ms (18% faster), 2 syncs/layer
-c4b2795	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.28	9184	26.9	keep	batch-experts 200tok - 58% cache hit plateau, 1.28 tok/s steady state
-13e265c	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.67	5325	28.1	keep	K=6 expert pruning 50tok - 40% less I/O, coherent output
-13e265c	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.37	3661	28.2	keep	K=4 expert pruning 100tok - 60% hit, best cached config
-13e265c	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.72	2882	28.1	discard	K=3 expert pruning - quality collapse (model outputs end token only)
-5619b18	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.21	3364	5.4	keep	no-cache mode 100tok - 81% less RAM, mx.eval 183→124ms (32% compute win)
-5619b18	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.23	3263	5.7	discard	no-cache+C-ext - same as mmap (9 scattered reads = structural bottleneck)
-5619b18	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.20	3591	13.2	keep	10GB cache sweep - 43% hit, 13.2GB RAM
-5619b18	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.33	3633	21.5	keep	20GB cache sweep - 54% hit, 21.5GB RAM
-b52d187	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.05	3068	5.9	keep	packed layers 0-8 + no-cache - 6.6-7.5 GB/s packed vs 5.3 scattered (25% faster)
-a5a969f	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.49	2712	5.5	keep	ALL 60 layers packed + no-cache + K=4 - I/O 205ms, 240 seeks, 3.5GB/s, BEST
-9a261c3	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.49	3313	2.1	keep	C ext packed + no-cache K=4 - same speed as mmap packed, only 2.1GB RAM
-9a261c3	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.27	3961	28.5	discard	pin-experts(20warm,top20) - 31% pin hit (routing diverged), 28.5GB Metal overhead
-84dbb24	Qwen3.5-397B-A17B-4bit	397.0	17.0	3.10	2614	5.3	keep	FULL STACK: packed+no-cache+K=4+batch+lazy-eval+pipeline — 280ms/tok, 3.10 tok/s
-002128a	Qwen3.5-397B-A17B-4bit	397.0	17.0	3.14	2518	5.4	keep	eval(inds) only + all prior opts — 278ms/tok, I/O 171ms, compute 97ms
-c8e30e4	Qwen3.5-397B-A17B-4bit	397.0	17.0	3.04	2851	5.8	discard	async-pipeline - I/O overlapped (2.65ms!) but graph explosion: mx.eval 97→279ms
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	10.10	804	5.8	discard	variable K=0 middle 40 layers - 10 TOK/S but blank output (quality collapse)
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	3.75	1967	5.4	discard	variable K=2 middle 40 - EOS, quality collapse
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	3.33	2246	5.7	discard	variable K=3 middle 40 - EOS, quality collapse (model needs K=4 on ALL layers)
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	5.02	3159	6.1	discard	two-pass 200tok - 150ms/tok (routing=24+IO=72+compute=53) but GARBAGE OUTPUT (wrong routing)
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.55	3116	4.3	discard	speculative prefetch - SLOWER (prefetch evicts useful page cache)
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	10.10	804	5.8	discard	variable K=0 middle 40 layers - 10 TOK/S ACHIEVED but blank output
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	5.27	3972	5.8	keep	TWO-PASS OVERLAPPED: routing=42ms io=1ms(!) compute=88ms = 135ms BEST EVER
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	5.61	2792	6.3	keep	TWO-PASS FINAL: shared expert + overlapped I/O + single eval — 130ms/tok, coherent-ish
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.93	5416	5.4	discard	superset two-pass (h_correction) - 93-99% superset hit but STILL repetitive output
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.73	7674	5.5	discard	cache-restored two-pass - correct attention but 2x compute + 60-88% superset hit = SLOWER
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.20	0	5.7	keep	K=10 (model default) per-layer — best quality, richest output
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.91	0	5.7	keep	K=6 per-layer — same quality as K=10, 59% faster
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	3.15	2730	5.3	keep	K=4 per-layer 200tok QUALITY BEST — excellent output, all optimizations
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	6.02	3511	4.3	keep	K=4 two-pass 500tok SPEED BEST — coherent but repetitive, I/O=1ms overlapped
-HEAD	benchmark	0.0	0.0	0.00	0	0	keep	BENCHMARK: single-eval MoE compute = 18.6ms (vs 34.6ms per-layer eval). 46% is orchestration overhead.
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.60	14466	2.2	discard	single-eval two-pass: GPU=39ms(!) but convert=191ms serial bottleneck. 466ms total.
-HEAD	benchmark	0.0	0.0	0.00	0	0	keep	BATCH SWEEP: per-layer=20.7ms, every-4=13.0ms, every-15=9.7ms, single=8.6ms (K=10, 60 layers)
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.00	0	0	discard	overlapped route+convert: SLOWER (118ms vs 70ms) — GIL contention kills threading for mx.array
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.00	0	0	keep	C ext pread→Metal buffer: 39ms for 240 experts (43 GB/s) vs Python 188ms — 4.8x speedup, byte-perfect
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	4.22	1558	7.2	discard	fast-load integrated: io_wait=43ms mx.eval=37ms but GARBAGE output (routing→buffer mapping bug)
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.00	0	0	keep	fast_moe_load stacked: 37ms warm (45 GB/s) for 240 experts → pre-stacked Metal buffers
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	8.71	0	0	keep	METAL ENGINE: 114.8ms/tok, I/O=66.9ms(25.4GB/s) compute=114.8ms. Pure C/Metal, no Python.
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	13.90	0	0	keep	METAL ENGINE: 71.9ms! 13.9 tok/s! Per-K scratch buffers → ONE cmd buffer per layer. BROKE 10 TOK/S!
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	14.40	0	0	keep	METAL ENGINE: 69.4ms! CPU weighted sum eliminates 60 cmd buffers. 14.4 tok/s!
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.28	25235	5.5	keep	C/METAL E2E: "The sum of 2+2 is" — COHERENT OUTPUT! CPU attention bottleneck. Shader barrier fix.
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.85	12000	5.5	keep	C/METAL E2E QUALITY: "Here's a thinking process that leads to..." — 1.85 tok/s, GPU matmuls!
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.04	0	5.5	keep	C/METAL FUSED: 3 cmd buffers/layer (was 8). Quality verified bit-perfect. 490ms/tok.
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	4.53	800	5.5	keep	C/METAL PIPELINE: "I am a 22 year old male" — 200ms/tok, 4.53 tok/s! Attention+MoE overlap!
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	5.29	0	5.5	keep	C/METAL: GPU norm+residual shaders, fused cmd buffers. Peak 5.29 tok/s. 189ms/tok.
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	5.24	1368	5.5	keep	C/METAL: parallel pread + async pipeline. Peak 5.24. 'the best way to make a cup of tea?'
-HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	5.29	1511	5.5	keep	C/METAL FULL: deferred experts + GPU attn + parallel pread. Quality: 'While there are many schools of thought on tea making'
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	3.30	2464	5.5	keep	C/METAL E2E: "the best way to make a cup of tea?" 300ms/tok. GPU attn scores REVERTED (too slow for short ctx)
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	5.29	0	5.5	keep	C/METAL peak: 189ms/tok, GPU norm+residual+fused dispatch. Quality output.
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.79	0	5.5	keep	C/METAL: BLAS delta-net (0.28ms vs 0.78ms cpu_attn), GCD dispatch, gated timing. 352ms/tok avg.
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	0.56	0	5.5	discard	mmap expert files: CATASTROPHIC 5x regression. Per-page faults 100x slower than pread for uncached 7MB experts.
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.10	0	5.5	discard	Malloc zero-copy cache 2581 entries (18GB): 52% hit but GPU memory pressure + page cache loss = slower
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.77	0	5.5	discard	Malloc zero-copy cache 500 entries (3.5GB): 37% hit, still slower than Metal LRU (2.93 vs 3.14)
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	1.70	0	5.5	discard	Speculative early routing: 53% prediction accuracy but cache pollution + overhead = 38% slower
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.67	0	5.5	discard	F_RDADVISE kernel hints: no improvement, added syscall overhead
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.75	0	5.5	keep	GPU combine+norm in CMD3: deferred_wait eliminated (0.83->0ms) but absorbed into cmd1_wait (0.49->1.78ms). Cleaner pipeline.
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	3.50	0	5.5	keep	GPU RoPE + fused CMD1+attention for full-attn layers. 4.76ms/layer (was 5.53). Quality verified.
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	2.83	0	5.5	keep	STABLE: GPU combine+norm + BLAS delta-net + fused full-attn CMD + 500 LRU cache. Cold cache 2.75-2.85 tok/s.
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	4.20	0	5.5	keep	4-bit warm cache: 4.20 tok/s sustained! Quality: Imagine you are in a massive library...
+HEAD	Qwen3.5-397B-A17B-4bit	397.0	17.0	4.80	0	5.5	keep	4-bit WARM: 4.80 avg, 5.31 peak. Matches previous 4.74/5.29. Code at parity + 2-bit infra ready.
+HEAD	Qwen3.5-397B-A17B-2bit	397.0	17.0	5.55	0	5.5	keep	2-BIT EXPERTS: 5.55 tok/s sustained 80 tokens! Quality: 'Classic Coin Analogy...light switch...Heads or'. EXCELLENT.
+HEAD	Qwen3.5-397B-A17B-2bit	397.0	17.0	5.61	0	5.5	keep	2-BIT 200tok: 5.61 tok/s sustained. Quality: math(255=15*17 CORRECT), code(sorted+key=len), science(plant analogy)
+HEAD	Qwen3.5-397B-A17B-2bit	397.0	17.0	5.68	0	5.5	keep	F_NOCACHE + 2-bit: 5.68 avg, 5.91 peak. Bypass page cache avoids thrashing 120GB data.
