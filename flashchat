@@ -302,18 +302,27 @@ cmd_config() {
         else
             echo "=== Reset Environment ==="
             echo ""
-            echo "This will re-run the setup wizard."
+            echo "This will re-run the setup wizard and configuration."
             echo "Your chat sessions will be preserved."
             echo ""
             read -p "Continue? [Y/n] " -n 1 -r
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
                 rm -f "$config_file"
+                
                 echo ""
-                echo "Config removed. Re-running setup..."
+                echo "Step 1: Configuration Options"
+                echo "============================="
+                prompt_config_options
+                
                 echo ""
-                # Re-run setup wizard with force mode
+                echo "Step 2: Setup Components"
+                echo "========================="
                 ensure_setup 1
+                
+                # Save config (prompt_config_options already created it)
+                echo ""
+                echo "Configuration saved."
             else
                 echo "Cancelled."
             fi
@@ -357,6 +366,122 @@ cmd_config() {
     echo "  flashchat config --full-reset Delete everything"
     echo ""
     echo "To modify, edit: $config_file"
+}
+
+# -----------------------------------------------------------------------------
+# Prompt for all config options
+# -----------------------------------------------------------------------------
+prompt_config_options() {
+    # Try to read from tty if available, otherwise use defaults
+    if [ -t 0 ]; then
+        prompt_config_interactive
+    else
+        # Non-interactive: use defaults
+        echo ""
+        echo "=== Configure Settings ==="
+        echo "(Running in non-interactive mode - using defaults)"
+        echo ""
+        
+        local default_repo default_quant default_tokens default_temp
+        local default_top_p default_port default_host default_think default_color
+        
+        default_repo=$(flashmoe_get MODEL_REPO)
+        default_quant=$(flashmoe_get QUANTIZATION)
+        default_tokens=$(flashmoe_get MAX_TOKENS)
+        default_temp=$(flashmoe_get TEMPERATURE)
+        default_top_p=$(flashmoe_get TOP_P)
+        default_port=$(flashmoe_get SERVER_PORT)
+        default_host=$(flashmoe_get SERVER_HOST)
+        default_think=$(flashmoe_get SHOW_THINKING)
+        default_color=$(flashmoe_get COLOR_OUTPUT)
+        
+        # Create config file with defaults
+        flashmoe_create_default_config
+        
+        echo "Using all defaults."
+    fi
+}
+
+prompt_config_interactive() {
+    # Create fresh config file
+    rm -f /tmp/flashmoe_new_config
+    touch /tmp/flashmoe_new_config
+    
+    echo ""
+    echo "=== Configure Settings ==="
+    echo "(Press Enter to accept default)"
+    echo ""
+    
+    # Model Repository
+    local default_repo
+    default_repo=$(flashmoe_get MODEL_REPO)
+    printf "Model repository [%s]: " "$default_repo"
+    read -r REPLY
+    echo "MODEL_REPO=\"${REPLY:-$default_repo}\"" >> /tmp/flashmoe_new_config
+    
+    # Quantization
+    local default_quant
+    default_quant=$(flashmoe_get QUANTIZATION)
+    printf "Quantization (4bit/2bit) [%s]: " "$default_quant"
+    read -r REPLY
+    echo "QUANTIZATION=\"${REPLY:-$default_quant}\"" >> /tmp/flashmoe_new_config
+    
+    # Max Tokens
+    local default_tokens
+    default_tokens=$(flashmoe_get MAX_TOKENS)
+    printf "Max tokens to generate [%s]: " "$default_tokens"
+    read -r REPLY
+    echo "MAX_TOKENS=\"${REPLY:-$default_tokens}\"" >> /tmp/flashmoe_new_config
+    
+    # Temperature
+    local default_temp
+    default_temp=$(flashmoe_get TEMPERATURE)
+    printf "Temperature (0.0-2.0) [%s]: " "$default_temp"
+    read -r REPLY
+    echo "TEMPERATURE=\"${REPLY:-$default_temp}\"" >> /tmp/flashmoe_new_config
+    
+    # Top P
+    local default_top_p
+    default_top_p=$(flashmoe_get TOP_P)
+    printf "Top-p (0.0-1.0) [%s]: " "$default_top_p"
+    read -r REPLY
+    echo "TOP_P=\"${REPLY:-$default_top_p}\"" >> /tmp/flashmoe_new_config
+    
+    # Server Port
+    local default_port
+    default_port=$(flashmoe_get SERVER_PORT)
+    printf "Server port [%s]: " "$default_port"
+    read -r REPLY
+    echo "SERVER_PORT=\"${REPLY:-$default_port}\"" >> /tmp/flashmoe_new_config
+    
+    # Server Host
+    local default_host
+    default_host=$(flashmoe_get SERVER_HOST)
+    printf "Server host [%s]: " "$default_host"
+    read -r REPLY
+    echo "SERVER_HOST=\"${REPLY:-$default_host}\"" >> /tmp/flashmoe_new_config
+    
+    # Show Thinking
+    local default_think
+    default_think=$(flashmoe_get SHOW_THINKING)
+    printf "Show thinking tokens (0/1) [%s]: " "$default_think"
+    read -r REPLY
+    echo "SHOW_THINKING=\"${REPLY:-$default_think}\"" >> /tmp/flashmoe_new_config
+    
+    # Color Output
+    local default_color
+    default_color=$(flashmoe_get COLOR_OUTPUT)
+    printf "Color output (0/1) [%s]: " "$default_color"
+    read -r REPLY
+    echo "COLOR_OUTPUT=\"${REPLY:-$default_color}\"" >> /tmp/flashmoe_new_config
+    
+    # Save config
+    flashmoe_create_default_config
+    cat /tmp/flashmoe_new_config >> "$(flashmoe_get CONFIG_FILE)"
+    rm -f /tmp/flashmoe_new_config
+    
+    echo ""
+    echo "Settings configured."
 }
 
 # -----------------------------------------------------------------------------
