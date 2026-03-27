@@ -111,6 +111,9 @@ Options:
 1. **Config reset via `flashchat config`** ✅ IMPLEMENTED
    - Added `--reset` to re-run setup wizard (preserves sessions)
    - Added `--full-reset` to delete all data
+   - Added full config prompts: model repo, quantization, max tokens,
+     temperature, top-p, server port, server host, show thinking, color output
+   - Interactive prompts when run from terminal, defaults when piped
 
 2. **Remove streamchat**
    - Original plan: remove entirely when flashchat complete
