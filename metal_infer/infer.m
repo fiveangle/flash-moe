@@ -656,10 +656,10 @@ static Vocabulary *load_vocab(const char *path) {
 
 static const char *decode_token(Vocabulary *v, int token_id) {
     if (token_id < 0 || token_id >= v->num_tokens) {
-        return "";
+        return "<unk>";
     }
     if (!v->tokens[token_id]) {
-        return "";
+        return "<unk>";
     }
     
     const char *src = v->tokens[token_id];
