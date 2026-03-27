@@ -108,9 +108,9 @@ Options:
 
 ### Potential Enhancements (Not Yet Implemented)
 
-1. **Config reset via `flashchat config`**
-   - Original plan mentioned "reset environment" option
-   - Not yet implemented - requires adding interactive config editing
+1. **Config reset via `flashchat config`** ✅ IMPLEMENTED
+   - Added `--reset` to re-run setup wizard (preserves sessions)
+   - Added `--full-reset` to delete all data
 
 2. **Remove streamchat**
    - Original plan: remove entirely when flashchat complete
