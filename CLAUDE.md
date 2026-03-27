@@ -12,9 +12,9 @@ The entire 209GB model streams from SSD through a custom Metal compute pipeline.
 
 | Configuration | tok/s | Quality | Notes |
 |--------------|-------|---------|-------|
-| 4-bit experts, FMA kernel | **4.36** | Excellent | Current best. Full tool calling. 209GB on disk. |
+| 4-bit experts, FMA kernel | **4.36** | Excellent | Current best. Full tool calling. 209GB on disk. Requires packed_experts/. |
 | 4-bit experts, baseline | 3.90 | Excellent | Before FMA kernel optimization. |
-| 2-bit experts, trust OS | 5.74 | Good* | 120GB on disk. *Breaks JSON/tool calling. |
+| 2-bit experts, trust OS | 5.74 | Good* | 120GB on disk. *Breaks JSON/tool calling. Requires packed_experts_2bit/. |
 | 2-bit peak single token | 7.05 | Good* | Warm cache burst. *Not suitable for tool use. |
 
 *2-bit quantization produces `\name\` instead of `"name"` in JSON output, making tool calling unreliable. 4-bit is the production configuration.
@@ -71,7 +71,16 @@ On Apple Silicon, SSD DMA and GPU compute share the same memory controller and c
 ```bash
 cd metal_infer
 make
-# 4-bit inference (needs packed_experts/ directory)
+
+# First-time setup: extract non-expert weights and vocabulary
+python3 extract_weights.py --output .
+python3 export_tokenizer.py tokenizer.json vocab.bin
+
+# First-time setup: extract expert weights (~218GB, one-time operation)
+# This is required for BOTH 2-bit and 4-bit inference modes
+python3 ../repack_experts.py
+
+# 4-bit inference (full quality, production use)
 ./infer --prompt "Explain quantum computing" --tokens 100
 
 # 2-bit inference (faster but breaks tool calling)
@@ -95,16 +104,18 @@ metal_infer/
   main.m               # MoE-only benchmark
   Makefile             # Build system
   extract_weights.py   # Creates model_weights.bin from safetensors
-  repack_experts_2bit.py  # 4-bit → 2-bit expert requantization
-  train_predictor.py   # Expert routing prediction analysis
-  model_weights.bin    # Non-expert weights (5.5GB, mmap'd)
+  export_tokenizer.py  # Creates vocab.bin from tokenizer.json
+  repack_experts.py    # Extracts expert weights to packed_experts/ (4-bit)
+  model_weights.bin    # Non-expert weights (5.5GB, extracted from safetensors)
   model_weights.json   # Tensor manifest
-  vocab.bin            # Vocabulary for token decoding
-  tokenizer.bin        # Pre-exported BPE tokenizer data
+  vocab.bin            # Vocabulary (8MB, extracted from tokenizer.json)
 
-repack_experts.py      # 4-bit expert packing from safetensors
+repack_experts.py      # 4-bit expert packing from safetensors (root level)
 progress.py            # Results visualization (Q2/Q4 tracks)
 results.tsv            # Experiment log (58 experiments)
+
+<model_dir>/
+  packed_experts/      # Expert weights (~218GB, extracted from safetensors)
 ```
 
 ## What We Tried (and What Worked)
@@ -139,9 +150,9 @@ results.tsv            # Experiment log (58 experiments)
 
 ## Safety
 
-This is a primary development machine. The engine explicitly controls memory:
+The engine explicitly controls memory:
 - Non-expert weights: 5.5GB (mmap'd, read-only)
 - Metal scratch buffers: ~200MB
-- Total: ~6GB, leaving 42GB for OS + page cache
-- No OOM risk. Expert data streams from SSD on demand.
-- No custom caches. Trust the OS.
+- Total: ~6GB, leaving most RAM for OS + page cache
+- Expert data (~218GB) streams from SSD on demand, not loaded into RAM
+- No custom caches. Trust the OS page cache.

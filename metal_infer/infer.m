@@ -585,36 +585,122 @@ static Vocabulary *load_vocab(const char *path) {
         return NULL;
     }
 
-    uint32_t num_entries, max_id;
-    fread(&num_entries, 4, 1, f);
-    fread(&max_id, 4, 1, f);
+    char magic[4];
+    fread(magic, 1, 4, f);
+    if (memcmp(magic, "BPET", 4) != 0) {
+        fprintf(stderr, "ERROR: Invalid vocab file (bad magic)\n");
+        fclose(f);
+        return NULL;
+    }
+
+    uint32_t version, vocab_size, num_merges, num_added;
+    fread(&version, 4, 1, f);
+    fread(&vocab_size, 4, 1, f);
+    fread(&num_merges, 4, 1, f);
+    fread(&num_added, 4, 1, f);
+
+    // Total tokens = highest token ID in vocab
+    // Vocab entries have IDs up to ~151936, added tokens use 248044-248077
+    uint32_t total_tokens = 248078;  // max added token ID + 1
 
     Vocabulary *v = calloc(1, sizeof(Vocabulary));
-    v->num_tokens = num_entries;
-    v->tokens = calloc(num_entries, sizeof(char *));
-    v->lengths = calloc(num_entries, sizeof(int));
+    v->num_tokens = total_tokens;
+    v->tokens = calloc(total_tokens, sizeof(char *));
+    v->lengths = calloc(total_tokens, sizeof(int));
 
-    for (uint32_t i = 0; i < num_entries; i++) {
+    // Read vocab entries
+    for (uint32_t i = 0; i < vocab_size; i++) {
+        uint32_t token_id;
         uint16_t byte_len;
+        fread(&token_id, 4, 1, f);
         fread(&byte_len, 2, 1, f);
-        if (byte_len > 0) {
-            v->tokens[i] = malloc(byte_len + 1);
-            fread(v->tokens[i], 1, byte_len, f);
-            v->tokens[i][byte_len] = '\0';
-            v->lengths[i] = byte_len;
+        if (byte_len > 0 && token_id < total_tokens) {
+            v->tokens[token_id] = malloc(byte_len + 1);
+            fread(v->tokens[token_id], 1, byte_len, f);
+            v->tokens[token_id][byte_len] = '\0';
+            v->lengths[token_id] = byte_len;
+        } else {
+            fseek(f, byte_len, SEEK_CUR);
+        }
+    }
+
+    // Skip merges section
+    for (uint32_t i = 0; i < num_merges; i++) {
+        uint16_t len_a, len_b;
+        fread(&len_a, 2, 1, f);
+        fseek(f, len_a, SEEK_CUR);
+        fread(&len_b, 2, 1, f);
+        fseek(f, len_b, SEEK_CUR);
+    }
+
+    // Read added tokens
+    for (uint32_t i = 0; i < num_added; i++) {
+        uint32_t token_id;
+        uint16_t byte_len;
+        fread(&token_id, 4, 1, f);
+        fread(&byte_len, 2, 1, f);
+        if (byte_len > 0 && token_id < total_tokens) {
+            v->tokens[token_id] = malloc(byte_len + 1);
+            fread(v->tokens[token_id], 1, byte_len, f);
+            v->tokens[token_id][byte_len] = '\0';
+            v->lengths[token_id] = byte_len;
+        } else {
+            fseek(f, byte_len, SEEK_CUR);
         }
     }
 
     fclose(f);
-    printf("[vocab] Loaded %d tokens\n", num_entries);
+    printf("[vocab] Loaded %d tokens\n", v->num_tokens);
     return v;
 }
 
 static const char *decode_token(Vocabulary *v, int token_id) {
-    if (token_id < 0 || token_id >= v->num_tokens || !v->tokens[token_id]) {
-        return "<unk>";
+    if (token_id < 0 || token_id >= v->num_tokens) {
+        return "";
     }
-    return v->tokens[token_id];
+    if (!v->tokens[token_id]) {
+        return "";
+    }
+    
+    const char *src = v->tokens[token_id];
+    
+    // Filter out special control tokens
+    if (strcmp(src, "<|im_end|>") == 0) return "";
+    if (strcmp(src, "<|im_start|>") == 0) return "";
+    if (strcmp(src, "<|endoftext|>") == 0) return "";
+    if (strcmp(src, "<think>") == 0) return "";
+    if (strcmp(src, "") == 0) return "";
+    if (strcmp(src, "<|im_start|>user") == 0) return "";
+    if (strcmp(src, "<|im_start|>assistant") == 0) return "";
+    if (strcmp(src, "<|im_start|>system") == 0) return "";
+    
+    // Replace UTF-8 encoded bytes with actual characters
+    static char buf[256];
+    char *dst = buf;
+    const unsigned char *s = (const unsigned char *)src;
+    
+    while (*s && dst < buf + 250) {
+        // 0xC4 0x8A = U+010A (newline in GPT-2 byte encoding)
+        if (s[0] == 0xC4 && s[1] == 0x8A) { *dst++ = '\n'; s += 2; continue; }
+        // 0xC4 0x8B = U+010B (tab)
+        if (s[0] == 0xC4 && s[1] == 0x8B) { *dst++ = '\t'; s += 2; continue; }
+        // 0xC4 0xA0 = U+0120 (space marker Ġ)
+        if (s[0] == 0xC4 && s[1] == 0xA0) { *dst++ = ' '; s += 2; continue; }
+        // 0xC4 0xA1 = U+0121 (ãŁ - often before punctuation)
+        if (s[0] == 0xC4 && s[1] == 0xA1) { *dst++ = ' '; s += 2; continue; }
+        // 0xE2 0x80 0xA6 = U+2026 (ellipsis â€¦)
+        if (s[0] == 0xE2 && s[1] == 0x80 && s[2] == 0xA6) { *dst++ = '.'; *dst++ = '.'; *dst++ = '.'; s += 3; continue; }
+        // 0xE2 0x80 0xA0 = U+2020 (en space)
+        if (s[0] == 0xE2 && s[1] == 0x80 && s[2] == 0xA0) { *dst++ = ' '; s += 3; continue; }
+        // 0xE2 0x80 0x94 = U+2014 (em dash —)
+        if (s[0] == 0xE2 && s[1] == 0x80 && s[2] == 0x94) { *dst++ = '-'; *dst++ = '-'; s += 3; continue; }
+        // 0xE2 0x80 0x99 = U+2019 (right single quote ')
+        if (s[0] == 0xE2 && s[1] == 0x80 && s[2] == 0x99) { *dst++ = '\''; s += 3; continue; }
+        *dst++ = *s++;
+    }
+    *dst = '\0';
+    
+    return buf;
 }
 
 // ============================================================================
@@ -652,6 +738,8 @@ static void init_tokenizer(void) {
     const char *paths[] = {
         "tokenizer.bin",
         "metal_infer/tokenizer.bin",
+        "vocab.bin",
+        "metal_infer/vocab.bin",
         NULL
     };
     for (int i = 0; paths[i]; i++) {
@@ -3800,7 +3888,9 @@ static void build_layer_cache(WeightFile *wf) {
     }
 
     layer_cache_built = 1;
-    printf("[cache] Pre-computed weight pointers for %d layers\n", NUM_LAYERS);
+    if (g_timing_enabled) {
+        printf("[cache] Pre-computed weight pointers for %d layers\n", NUM_LAYERS);
+    }
 }
 
 // ============================================================================
@@ -6833,7 +6923,9 @@ int main(int argc, char **argv) {
                     pread(layer_fds[i], dummy, sizeof(dummy), 0);
                 }
             }
-            printf("[warmup] Page cache hint: %.1f ms\n", now_ms() - t_warm);
+            if (g_timing_enabled) {
+                printf("[warmup] Page cache hint: %.1f ms\n", now_ms() - t_warm);
+            }
         }
 
         // ---- Allocate per-layer state ----
@@ -6872,7 +6964,9 @@ int main(int argc, char **argv) {
         // ---- Generate tokens ----
         reset_delta_net_state();  // zero GPU delta-net state before generation
         if (g_cache_telemetry_enabled) cache_telemetry_reset();
-        printf("--- Generating %d tokens ---\n", max_tokens);
+        if (g_timing_enabled) {
+            printf("--- Generating %d tokens ---\n", max_tokens);
+        }
         int pos = 0;  // position counter for RoPE
 
         // ---- Batch prefill: pre-embed all prompt tokens ----
@@ -6886,7 +6980,9 @@ int main(int argc, char **argv) {
                 embed_lookup(wf, pt->ids[i], embed_batch + (size_t)i * HIDDEN_DIM);
             }
             double embed_ms = now_ms() - t_embed;
-            printf("  [prefill] batch embed %d tokens: %.1f ms\n", pt->count, embed_ms);
+            if (g_timing_enabled) {
+                printf("  [prefill] batch embed %d tokens: %.1f ms\n", pt->count, embed_ms);
+            }
         }
 
         // ---- Batch prefill loop ----
@@ -6932,8 +7028,10 @@ int main(int argc, char **argv) {
             double prefill_batch_ms = now_ms() - t_prefill_batch;
             double avg_ms = (pt->count > 2) ?
                 (prefill_batch_ms - first_tok_ms) / (pt->count - 2) : first_tok_ms;
-            printf("  [prefill] %d/%d tokens: %.0f ms (first: %.0f ms, rest avg: %.0f ms)\n",
-                   pt->count - 1, pt->count, prefill_batch_ms, first_tok_ms, avg_ms);
+            if (g_timing_enabled) {
+                printf("  [prefill] %d/%d tokens: %.0f ms (first: %.0f ms, rest avg: %.0f ms)\n",
+                       pt->count - 1, pt->count, prefill_batch_ms, first_tok_ms, avg_ms);
+            }
         }
 
         // ---- Last prefill token (or single-token prompt) ----
@@ -6980,9 +7078,7 @@ int main(int argc, char **argv) {
         int next_token = cpu_argmax(logits, VOCAB_SIZE);
         double ttft_ms = now_ms() - t0;
 
-        // Debug: show top-5 logits for first token
-        {
-            // Find top 5 manually
+        if (g_timing_enabled) {
             int top5[5] = {0,0,0,0,0};
             float topv[5] = {-1e30f,-1e30f,-1e30f,-1e30f,-1e30f};
             for (int i = 0; i < VOCAB_SIZE; i++) {
@@ -6998,8 +7094,10 @@ int main(int argc, char **argv) {
             fprintf(stderr, "[debug] hidden rms after final_norm=%.4f, logits rms=%.4f\n",
                     vec_rms(hidden, HIDDEN_DIM), vec_rms(logits, VOCAB_SIZE));
         }
-        printf("[ttft] %.0f ms (prefill %d tokens + lm_head %.0f ms)\n",
-               ttft_ms, pt->count, lm_ms);
+        if (g_timing_enabled) {
+            printf("[ttft] %.0f ms (prefill %d tokens + lm_head %.0f ms)\n",
+                   ttft_ms, pt->count, lm_ms);
+        }
 
         printf("\n--- Output ---\n");
         printf("%s", decode_token(vocab, next_token));
@@ -7076,15 +7174,19 @@ int main(int argc, char **argv) {
             double tok_time = t_gen_end - t_gen_start;
 
             // Print progress to stderr
-            fprintf(stderr, "  [gen %d/%d] token_id=%d (%.0f ms, %.2f tok/s)\n",
-                    gen, max_tokens, next_token, tok_time, 1000.0 / tok_time);
+            if (g_timing_enabled) {
+                fprintf(stderr, "  [gen %d/%d] token_id=%d (%.0f ms, %.2f tok/s)\n",
+                        gen, max_tokens, next_token, tok_time, 1000.0 / tok_time);
+            }
         }
 
         if (g_timing_enabled) timing_print();
         printf("\n\n--- Statistics ---\n");
         double total_time = now_ms() - t0;
         printf("Total time:     %.1f s\n", total_time / 1000.0);
-        printf("TTFT:           %.0f ms\n", ttft_ms);
+        if (g_timing_enabled) {
+            printf("TTFT:           %.0f ms\n", ttft_ms);
+        }
         printf("Tokens:         %d generated\n", total_generated);
         if (total_generated > 1) {
             double gen_time = total_time - ttft_ms;
