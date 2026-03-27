@@ -255,15 +255,69 @@ cmd_sessions() {
 # Command: config
 # -----------------------------------------------------------------------------
 cmd_config() {
+    local reset_mode=""
+    local full_reset=0
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --reset)
+                reset_mode="environment"
+                shift
+                ;;
+            --full-reset)
+                reset_mode="environment"
+                full_reset=1
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+    
     flashmoe_load_config
     
     local config_file
     config_file=$(flashmoe_get CONFIG_FILE)
     
-    if [ -n "$1" ] && [ "$1" = "--reset" ]; then
-        echo "Resetting configuration..."
-        rm -f "$config_file"
-        echo "Config removed. Run 'flashchat' to reconfigure."
+    # Handle reset modes
+    if [ "$reset_mode" = "environment" ]; then
+        if [ $full_reset -eq 1 ]; then
+            echo "=== Full Reset ==="
+            echo ""
+            echo "This will delete ALL data including:"
+            echo "  - Configuration"
+            echo "  - All chat sessions"
+            echo "  - All settings"
+            echo ""
+            read -p "Are you sure? [y/N] " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                rm -f "$config_file"
+                rm -rf "$(flashmoe_get_sessions_dir)"
+                echo "Full reset complete. All data deleted."
+            else
+                echo "Cancelled."
+            fi
+        else
+            echo "=== Reset Environment ==="
+            echo ""
+            echo "This will re-run the setup wizard."
+            echo "Your chat sessions will be preserved."
+            echo ""
+            read -p "Continue? [Y/n] " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
+                rm -f "$config_file"
+                echo ""
+                echo "Config removed. Re-running setup..."
+                echo ""
+                # Re-run setup wizard
+                ensure_setup
+            else
+                echo "Cancelled."
+            fi
+        fi
         return
     fi
     
@@ -297,6 +351,10 @@ cmd_config() {
     echo "UI:"
     echo "  SHOW_THINKING:   $(flashmoe_get SHOW_THINKING)"
     echo "  COLOR_OUTPUT:    $(flashmoe_get COLOR_OUTPUT)"
+    echo ""
+    echo "Options:"
+    echo "  flashchat config --reset      Re-run setup wizard (keep sessions)"
+    echo "  flashchat config --full-reset Delete everything"
     echo ""
     echo "To modify, edit: $config_file"
 }
