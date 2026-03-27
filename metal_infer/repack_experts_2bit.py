@@ -398,14 +398,27 @@ def verify_expert(expert_4bit: bytes, expert_2bit: bytes) -> dict:
 # Main
 # ============================================================================
 
+def get_default_model_path():
+    """Get default model path from environment or compute from MODEL_REPO."""
+    model_repo = os.environ.get('FLASHMOE_MODEL_REPO', 'mlx-community/Qwen3.5-397B-A17B-4bit')
+    escaped_repo = model_repo.replace('/', '--')
+    hf_cache = os.path.expanduser('~/.cache/huggingface/hub')
+    snapshot_dir = f"{hf_cache}/models--{escaped_repo}/snapshots"
+    
+    if os.path.isdir(snapshot_dir):
+        snapshots = sorted(os.listdir(snapshot_dir))
+        if snapshots:
+            return f"{snapshot_dir}/{snapshots[-1]}"
+    
+    return os.path.expanduser(f'~/.cache/huggingface/hub/models--{escaped_repo}/snapshots/<snapshot>')
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Requantize 4-bit packed experts to 2-bit')
     parser.add_argument('--model', type=str,
-                        default=os.path.expanduser(
-                            '~/.cache/huggingface/hub/models--mlx-community--Qwen3.5-397B-A17B-4bit'
-                            '/snapshots/39159bd8aa74f5c8446d2b2dc584f62bb51cb0d3'),
-                        help='Path to model directory (containing packed_experts/)')
+                        default=os.environ.get('FLASHMOE_MODEL_PATH') or get_default_model_path(),
+                        help='Path to model directory (or set FLASHMOE_MODEL_PATH)')
     parser.add_argument('--output', type=str, default=None,
                         help='Output directory (default: MODEL/packed_experts_2bit)')
     parser.add_argument('--layer', type=int, default=None,

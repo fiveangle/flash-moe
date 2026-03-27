@@ -6613,7 +6613,9 @@ static void print_usage(const char *prog) {
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        const char *model_path = MODEL_PATH_DEFAULT;
+        // Support FLASHMOE_MODEL_PATH environment variable
+        const char *env_model_path = getenv("FLASHMOE_MODEL_PATH");
+        const char *model_path = env_model_path ? env_model_path : MODEL_PATH_DEFAULT;
         const char *weights_path = NULL;
         const char *manifest_path = NULL;
         const char *vocab_path = NULL;
@@ -6623,7 +6625,10 @@ int main(int argc, char **argv) {
         int K = 4;
         int cache_entries = 0;  // default 0: trust OS page cache (38% faster than Metal LRU)
         int malloc_cache_entries = 0;  // 0 = disabled (override with --malloc-cache)
-        int serve_port = 0;  // 0 = disabled, >0 = HTTP serve mode
+        
+        // Support FLASHMOE_SERVER_PORT environment variable
+        const char *env_serve_port = getenv("FLASHMOE_SERVER_PORT");
+        int serve_port = env_serve_port ? atoi(env_serve_port) : 0;
 
         static struct option long_options[] = {
             {"model",         required_argument, 0, 'm'},

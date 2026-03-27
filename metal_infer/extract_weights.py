@@ -37,14 +37,30 @@ def parse_safetensors_header(filepath):
     return header, data_start
 
 
+def get_default_model_path():
+    """Get default model path from environment or compute from MODEL_REPO."""
+    model_repo = os.environ.get('FLASHMOE_MODEL_REPO', 'mlx-community/Qwen3.5-397B-A17B-4bit')
+    escaped_repo = model_repo.replace('/', '--')
+    hf_cache = os.path.expanduser('~/.cache/huggingface/hub')
+    snapshot_dir = f"{hf_cache}/models--{escaped_repo}/snapshots"
+    
+    # Try to find latest snapshot
+    if os.path.isdir(snapshot_dir):
+        snapshots = sorted(os.listdir(snapshot_dir))
+        if snapshots:
+            return f"{snapshot_dir}/{snapshots[-1]}"
+    
+    # Fallback to expected path
+    return os.path.expanduser(f'~/.cache/huggingface/hub/models--{escaped_repo}/snapshots/<snapshot>')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Extract non-expert weights to binary')
     parser.add_argument('--model', type=str,
-                        default=os.path.expanduser(
-                            '~/.cache/huggingface/hub/models--mlx-community--Qwen3.5-397B-A17B-4bit'
-                            '/snapshots/39159bd8aa74f5c8446d2b2dc584f62bb51cb0d3'),
-                        help='Path to model directory')
-    parser.add_argument('--output', type=str, default='.',
+                        default=os.environ.get('FLASHMOE_MODEL_PATH') or get_default_model_path(),
+                        help='Path to model directory (or set FLASHMOE_MODEL_PATH)')
+    parser.add_argument('--output', type=str,
+                        default=os.environ.get('FLASHMOE_WEIGHTS_DIR') or '.',
                         help='Output directory for model_weights.bin and .json')
     parser.add_argument('--include-experts', action='store_true',
                         help='Also extract expert weights (huge, not recommended)')

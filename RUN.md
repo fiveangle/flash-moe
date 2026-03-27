@@ -1,10 +1,25 @@
 # Running Flash-MoE
 
-This guide covers how to run inference using the `streamchat` CLI wrapper.
+This guide covers how to run inference using the `flashchat` CLI wrapper.
 
-## Prerequisites
+## Quick Start
 
-1. Download the model from HuggingFace:
+```bash
+./flashchat
+```
+
+Running `flashchat` with no arguments launches an interactive menu where you can:
+- Start a new chat session
+- Resume an existing session
+- Start the API server
+- Configure settings
+- View status
+
+## Installation
+
+### Prerequisites
+
+1. Download the model from HuggingFace (if not already downloaded):
    ```bash
    huggingface-cli download mlx-community/Qwen3.5-397B-A17B-4bit
    ```
@@ -14,79 +29,152 @@ This guide covers how to run inference using the `streamchat` CLI wrapper.
    cd metal_infer && make
    ```
 
-3. Create Python virtual environment (streamchat auto-detects and uses it):
+3. Create Python virtual environment:
    ```bash
    cd metal_infer
    python3 -m venv .venv
    .venv/bin/pip install numpy
    ```
 
-## Quick Start
+### First Run
+
+On first run, flashchat will automatically detect missing components and guide you through setup:
+
+1. If model is not downloaded → prompt to download from HuggingFace
+2. If weights are not extracted → prompt to extract (~5.5GB)
+3. If vocabulary is not exported → prompt to export (~8MB)
+4. If expert weights are not extracted → prompt to choose quantization mode:
+   - 4-bit (~218GB) - Full quality, tool calling supported
+   - 2-bit (~120GB) - Faster but breaks tool calling
+
+## Commands
+
+### Interactive Mode
 
 ```bash
-./streamchat "Hello world"
+./flashchat
 ```
 
-On first run, streamchat will automatically:
-1. Extract non-expert weights (~5.5GB) to `metal_infer/model_weights.bin`
-2. Create vocabulary binary from `tokenizer.json` to `metal_infer/vocab.bin`
-3. If 4-bit expert weights are missing, prompt to choose extraction mode
-4. Prompt to save settings to config file
-5. Begin expert weight extraction (30-60 minutes for 4-bit)
-6. Run inference
+Launches an interactive menu with options for chat, server, configuration, and more.
 
-## Running streamchat
+### Chat
 
 ```bash
-./streamchat "Your prompt here"
-./streamchat --2bit "Your prompt"         # use 2-bit quantized experts
-./streamchat "Hello" --tokens 50          # with extra options
-./streamchat "Hello" --tokens 20 --timing  # with timing breakdown
+./flashchat chat                    # Start new chat session
+./flashchat chat --resume <id>     # Resume existing session
 ```
 
-## Expert Weight Extraction
+Starts the interactive chat TUI. Automatically starts the server if not running.
 
-### When Extraction is Required
-
-The extraction dialog appears when:
-- 4-bit expert weights are not present
-- You pass `--2bit` but 2-bit expert weights are not present (and 4-bit exists)
-
-If expert weights already exist, the dialog is skipped and inference runs immediately.
-
-### Extraction Options
-
-| Option | Size | Quality | Notes |
-|--------|------|---------|-------|
-| `4` - 4-bit mode | ~218GB | Full | Tool calling supported |
-| `2` - 2-bit mode | ~120GB | Reduced | Faster, breaks JSON/tool calling |
-| `Q` - Quit | - | - | Run later with `./streamchat` |
-
-After selecting the quantization mode, you'll be asked if you want to save your preferences to a config file.
-
-### 2-bit Mode
-
-To use 2-bit quantized experts (faster but breaks tool calling):
+### API Server
 
 ```bash
-./streamchat --2bit "Your prompt"
+./flashchat serve                  # Start API server
+./flashchat serve --stop           # Stop running server
+./flashchat serve --port 8080      # Start on specific port
 ```
 
-If 4-bit experts exist but 2-bit don't, streamchat will prompt you to extract 2-bit weights.
+Starts the OpenAI-compatible HTTP server. Server runs persistently until stopped.
 
-## Configuration File
-
-streamchat supports a config file for default settings:
-- `~/.streamchatrc` (user-wide)
-- `./streamchatrc` (project-local, takes precedence)
-
-Config is created automatically on first run if you choose to save settings.
+### Single Prompt
 
 ```bash
-# Example ~/.streamchatrc
-DEFAULT_QUANT="4bit"
-DEFAULT_TOKENS="20"
-DEFAULT_TIMING="no"
+./flashchat prompt "Hello world"
+./flashchat prompt "Explain quantum computing" --tokens 50
+```
+
+Runs a single prompt and prints the response.
+
+### Configuration
+
+```bash
+./flashchat config                 # View configuration
+```
+
+View and edit settings. On first run, prompts to save configuration.
+
+### Status
+
+```bash
+./flashchat status
+```
+
+Shows system status including model, paths, server status, and generation settings.
+
+### Sessions
+
+```bash
+./flashchat sessions              # List all sessions
+./flashchat sessions --delete <id> # Delete a session
+```
+
+Manage chat sessions.
+
+## Configuration
+
+Configuration is loaded from (priority highest to lowest):
+
+1. `./flashmoe.config` (project-local)
+2. `~/.config/flash-moe/config` (user)
+3. Environment variables (`FLASHMOE_*`)
+4. Hardcoded defaults
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `FLASHMOE_MODEL_REPO` | HuggingFace repo | `mlx-community/Qwen3.5-397B-A17B-4bit` |
+| `FLASHMOE_MODEL_PATH` | Override model path | Auto-detected |
+| `FLASHMOE_QUANTIZATION` | 4bit or 2bit | `4bit` |
+| `FLASHMOE_SERVER_PORT` | Server port | `8000` |
+| `FLASHMOE_WEIGHTS_DIR` | Weights directory | `./metal_infer` |
+| `FLASHMOE_EXPERTS_DIR` | Experts directory | `<model>/packed_experts` |
+
+### Example Config File
+
+```bash
+# ~/.config/flash-moe/config
+
+# Model Settings
+MODEL_REPO="mlx-community/Qwen3.5-397B-A17B-4bit"
+
+# Quantization: 4bit or 2bit
+QUANTIZATION="4bit"
+
+# Generation Defaults
+MAX_TOKENS="8192"
+TEMPERATURE="0.7"
+TOP_P="0.9"
+
+# Server Settings
+SERVER_PORT="8000"
+SERVER_HOST="127.0.0.1"
+
+# UI Settings
+SHOW_THINKING="0"
+COLOR_OUTPUT="1"
+```
+
+## API Endpoints
+
+When running the server (`./flashchat serve`):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chat/completions` | POST | Chat completions (SSE streaming) |
+| `/v1/models` | GET | List available models |
+| `/health` | GET | Health check |
+
+### Example API Call
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5-397b-a17b",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 100
+  }'
 ```
 
 ## Setup Artifacts
@@ -98,3 +186,9 @@ DEFAULT_TIMING="no"
 | `metal_infer/vocab.bin` | 7.8MB | Tokenizer vocabulary |
 | `<model>/packed_experts/` | 218GB | 4-bit expert weights |
 | `<model>/packed_experts_2bit/` | 120GB | 2-bit expert weights |
+| `~/.config/flash-moe/config` | - | User configuration |
+| `~/.config/flash-moe/sessions/` | - | Chat session history |
+
+## Deprecated: streamchat
+
+The old `streamchat` script has been replaced by `flashchat`. Use `flashchat` for all operations.

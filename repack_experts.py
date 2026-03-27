@@ -211,10 +211,23 @@ def write_layout(output_dir):
     print(f"Wrote {path}")
 
 
+def get_default_index_path():
+    """Get default index path. Check common locations."""
+    candidates = [
+        './expert_index.json',
+        os.path.expanduser('~/Workspace/ane-research/expert_index.json'),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[0]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repack expert weights into contiguous per-layer binary files")
-    parser.add_argument('--index', default='/Users/danielwoods/Workspace/ane-research/expert_index.json',
-                        help='Path to expert_index.json')
+    parser.add_argument('--index', 
+                        default=os.environ.get('FLASHMOE_EXPERT_INDEX') or get_default_index_path(),
+                        help='Path to expert_index.json (or set FLASHMOE_EXPERT_INDEX)')
     parser.add_argument('--layers', default=None,
                         help='Layer spec: "all", "0-4", "0,5,10" (default: all)')
     parser.add_argument('--dry-run', action='store_true',

@@ -20,14 +20,31 @@ Binary format:
 import json
 import struct
 import sys
+import os
+
+
+def get_default_model_path():
+    """Get default model path from environment or compute from MODEL_REPO."""
+    model_repo = os.environ.get('FLASHMOE_MODEL_REPO', 'mlx-community/Qwen3.5-397B-A17B-4bit')
+    escaped_repo = model_repo.replace('/', '--')
+    hf_cache = os.path.expanduser('~/.cache/huggingface/hub')
+    snapshot_dir = f"{hf_cache}/models--{escaped_repo}/snapshots"
+    
+    if os.path.isdir(snapshot_dir):
+        snapshots = sorted(os.listdir(snapshot_dir))
+        if snapshots:
+            return f"{snapshot_dir}/{snapshots[-1]}"
+    
+    return os.path.expanduser(f'~/.cache/huggingface/hub/models--{escaped_repo}/snapshots/<snapshot>')
+
 
 def main():
-    tok_path = sys.argv[1] if len(sys.argv) > 1 else (
-        '/Users/danielwoods/.cache/huggingface/hub/'
-        'models--mlx-community--Qwen3.5-397B-A17B-4bit/'
-        'snapshots/39159bd8aa74f5c8446d2b2dc584f62bb51cb0d3/tokenizer.json'
-    )
-    out_path = sys.argv[2] if len(sys.argv) > 2 else 'tokenizer.bin'
+    # Allow env vars to override: FLASHMOE_MODEL_PATH, FLASHMOE_WEIGHTS_DIR
+    default_model_path = os.environ.get('FLASHMOE_MODEL_PATH') or get_default_model_path()
+    default_weights_dir = os.environ.get('FLASHMOE_WEIGHTS_DIR') or '.'
+    
+    tok_path = sys.argv[1] if len(sys.argv) > 1 else f"{default_model_path}/tokenizer.json"
+    out_path = sys.argv[2] if len(sys.argv) > 2 else f"{default_weights_dir}/vocab.bin"
 
     with open(tok_path, 'r', encoding='utf-8') as f:
         t = json.load(f)
