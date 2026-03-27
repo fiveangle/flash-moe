@@ -367,30 +367,35 @@ check_model_downloaded() {
     local model_path
     model_path=$(flashmoe_get MODEL_PATH)
     [ -d "$model_path" ] && [ -f "$model_path/model.safetensors.index.json" ]
+    return $?
 }
 
 check_weights_extracted() {
     local weights_dir
     weights_dir=$(flashmoe_get WEIGHTS_DIR)
     [ -f "$weights_dir/model_weights.bin" ] && [ -f "$weights_dir/model_weights.json" ]
+    return $?
 }
 
 check_vocab_exported() {
     local weights_dir
     weights_dir=$(flashmoe_get WEIGHTS_DIR)
     [ -f "$weights_dir/vocab.bin" ]
+    return $?
 }
 
 check_experts_extracted() {
     local experts_dir
     experts_dir=$(flashmoe_get EXPERTS_DIR)
     [ -f "$experts_dir/layer_00.bin" ]
+    return $?
 }
 
 check_experts_2bit_extracted() {
     local experts_2bit_dir
     experts_2bit_dir=$(flashmoe_get EXPERTS_2BIT_DIR)
     [ -f "$experts_2bit_dir/layer_00.bin" ]
+    return $?
 }
 
 prompt_download_model() {
@@ -567,6 +572,7 @@ prompt_save_config() {
 }
 
 ensure_setup() {
+    set +e  # Temporarily disable exit on error for setup checks
     flashmoe_load_config
     
     logv "Checking setup status..."
@@ -614,6 +620,8 @@ ensure_setup() {
     prompt_save_config
     
     logv "Setup complete."
+    
+    set -e  # Re-enable exit on error
 }
 
 # -----------------------------------------------------------------------------
