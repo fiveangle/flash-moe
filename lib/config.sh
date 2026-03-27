@@ -217,9 +217,10 @@ flashmoe_get_pid_file() {
 
 # -----------------------------------------------------------------------------
 # Get sessions directory
+# Note: Uses ~/.flash-moe/sessions for compatibility with existing chat.m
 # -----------------------------------------------------------------------------
 flashmoe_get_sessions_dir() {
-    echo "${FLASHMOE_CONFIG_DIR}/sessions"
+    echo "${HOME}/.flash-moe/sessions"
 }
 
 # Export functions for use in subshells
