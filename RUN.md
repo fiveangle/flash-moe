@@ -85,13 +85,30 @@ Starts the OpenAI-compatible HTTP server. Server runs persistently until stopped
 
 Runs a single prompt and prints the response.
 
+### Benchmark
+
+```bash
+./flashchat benchmark              # Show available benchmarks
+./flashchat benchmark run          # Single expert forward pass
+./flashchat benchmark verify       # Metal vs CPU verification
+./flashchat benchmark bench        # Single expert benchmark (10 iterations)
+./flashchat benchmark moe          # MoE forward (K experts, single layer)
+./flashchat benchmark moebench     # MoE benchmark (10 iterations)
+./flashchat benchmark full         # Full 60-layer forward (K=4)
+./flashchat benchmark fullbench   # Full benchmark (3 iterations)
+```
+
+Runs performance benchmarks. Uses configuration for model paths.
+
 ### Configuration
 
 ```bash
 ./flashchat config                 # View configuration
+./flashchat config --reset         # Re-run setup wizard (keeps sessions)
+./flashchat config --full-reset    # Delete all data and start fresh
 ```
 
-View and edit settings. On first run, prompts to save configuration.
+View and edit settings. The reset option allows you to reconfigure while preserving chat sessions.
 
 ### Status
 
