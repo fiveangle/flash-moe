@@ -369,6 +369,43 @@ cmd_config() {
 }
 
 # -----------------------------------------------------------------------------
+# Command: config (interactive menu version)
+# -----------------------------------------------------------------------------
+cmd_config_interactive() {
+    flashmoe_load_config
+    
+    echo ""
+    echo "=== Configure Settings ==="
+    echo "  -Model: $(flashmoe_get MODEL_REPO)"
+    echo "  -Quantization (2/4 bit): $(flashmoe_get QUANTIZATION)"
+    echo "  -Context window size: $(flashmoe_get MAX_TOKENS)"
+    echo "  -Temperature (0.0-2.0): $(flashmoe_get TEMPERATURE)"
+    echo "  -Top-p (0.0-1.0): $(flashmoe_get TOP_P)"
+    echo "  -Server API publishing port: $(flashmoe_get SERVER_PORT)"
+    echo "  -Chat client API host IP: $(flashmoe_get SERVER_HOST)"
+    echo "  -Show thinking tokens (0/1): $(flashmoe_get SHOW_THINKING)"
+    echo "  -Color output (0/1): $(flashmoe_get COLOR_OUTPUT)"
+    echo ""
+    read -p "Start edit config wizard? (y/n): " -n 1 -r
+    echo ""
+    
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        # Create fresh config file
+        rm -f "$(flashmoe_get CONFIG_FILE)"
+        
+        echo ""
+        echo "Step 1: Configuration Options"
+        echo "============================="
+        prompt_config_interactive
+        
+        echo ""
+        echo "Configuration updated."
+    else
+        echo "Cancelled."
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Prompt for all config options
 # -----------------------------------------------------------------------------
 prompt_config_options() {
@@ -1073,7 +1110,7 @@ interactive_menu() {
                 ;;
             c|C)
                 echo ""
-                cmd_config
+                cmd_config_interactive
                 ;;
             l|L)
                 echo ""
