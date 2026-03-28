@@ -275,7 +275,6 @@ cmd_config() {
             echo "  - Configuration"
             echo "  - All chat sessions"
             echo "  - All settings"
-            echo ""
             read -p "Are you sure? [y/N] " -n 1 -r
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -290,24 +289,19 @@ cmd_config() {
             echo ""
             echo "This will re-run the setup wizard and configuration."
             echo "Your chat sessions will be preserved."
-            echo ""
             read -p "Continue? [Y/n] " -n 1 -r
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
                 rm -f "$config_file"
                 
-                echo ""
                 echo "Step 1: Configuration Options"
                 echo "============================="
                 prompt_config_options
                 
-                echo ""
                 echo "Step 2: Setup Components"
                 echo "========================="
                 ensure_setup 1
                 
-                # Save config (prompt_config_options already created it)
-                echo ""
                 echo "Configuration saved."
             else
                 echo "Cancelled."
@@ -358,7 +352,6 @@ cmd_config_interactive() {
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
         rm -f "$(flashmoe_get CONFIG_FILE)"
         
-        echo ""
         echo "Step 1: Configuration Options"
         echo "============================="
         prompt_config_interactive
@@ -403,13 +396,11 @@ prompt_config_options() {
 }
 
 prompt_config_interactive() {
-    # Create fresh config file
     rm -f /tmp/flashmoe_new_config
     touch /tmp/flashmoe_new_config
     
     echo ""
-    echo "=== Configure Settings ==="
-    echo "(Press Enter to accept default)"
+    echo "=== Configure Settings === (Press Enter to accept default)"
     echo ""
     
     # Model Repository
@@ -534,7 +525,6 @@ prompt_download_model() {
     echo ""
     echo "Would you like to download it from HuggingFace?"
     echo "This may take 30+ minutes depending on your internet connection."
-    echo ""
     read -p "Download now? [Y/n] " -n 1 -r
     echo ""
     
@@ -563,7 +553,6 @@ prompt_extract_weights() {
     echo "This is a ONE-TIME operation."
     echo ""
     echo "Output: $weights_dir/model_weights.bin"
-    echo ""
     read -p "Extract weights now? [Y/n] " -n 1 -r
     echo ""
     
@@ -590,7 +579,6 @@ prompt_export_vocab() {
     echo "We need to export the tokenizer vocabulary."
     echo ""
     echo "Output: $weights_dir/vocab.bin"
-    echo ""
     read -p "Export vocabulary now? [Y/n] " -n 1 -r
     echo ""
     
@@ -689,7 +677,6 @@ prompt_save_config() {
     echo ""
     echo "Would you like to save these settings to a config file?"
     echo "This allows you to skip these prompts on future runs."
-    echo ""
     read -p "Save to config? [Y/n] " -n 1 -r
     echo ""
     
