@@ -102,7 +102,7 @@ Commands:
   serve             Start API server
   serve --stop      Stop running API server
   prompt "..."      Run single prompt and exit
-  benchmark         Run performance benchmarks (use: flashchat benchmark)
+  benchmark         Run benchmarks (run, verify, bench, moe, moebench, full, fullbench)
   config            Edit configuration settings
   status            Show system status
   sessions          List chat sessions
