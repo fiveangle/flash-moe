@@ -144,8 +144,6 @@ cmd_status() {
     echo "  Repository: $(flashmoe_get MODEL_REPO)"
     echo "  Path: $(flashmoe_get MODEL_PATH)"
     echo "  Quantization: $(flashmoe_get QUANTIZATION)"
-    echo ""
-    echo "Paths:"
     echo "  Weights: $(flashmoe_get WEIGHTS_DIR)"
     echo "  Experts: $(flashmoe_get EXPERTS_DIR)"
     echo "  Experts (2bit): $(flashmoe_get EXPERTS_2BIT_DIR)"
