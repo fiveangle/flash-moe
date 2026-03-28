@@ -312,7 +312,7 @@ cmd_config() {
     
     if [ ! -f "$config_file" ]; then
         echo "No config file found. Creating default..."
-        flashmoe_create_default_config quiet=1
+        flashmoe_create_default_config
         flashmoe_load_config
         config_file=$(flashmoe_get CONFIG_FILE)
     fi
@@ -350,8 +350,6 @@ cmd_config_interactive() {
     echo ""
     
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
-        rm -f "$(flashmoe_get CONFIG_FILE)"
-        
         echo "Step 1: Configuration Options"
         echo "============================="
         prompt_config_interactive
@@ -389,7 +387,7 @@ prompt_config_options() {
         default_color=$(flashmoe_get COLOR_OUTPUT)
         
         # Create config file with defaults
-        flashmoe_create_default_config quiet=1
+        flashmoe_create_default_config
         
         echo "Using all defaults."
     fi
@@ -467,7 +465,7 @@ prompt_config_interactive() {
     echo "COLOR_OUTPUT=\"${REPLY:-$default_color}\"" >> /tmp/flashmoe_new_config
     
     # Save config
-    flashmoe_create_default_config quiet=1
+    flashmoe_create_default_config
     cat /tmp/flashmoe_new_config >> "$(flashmoe_get CONFIG_FILE)"
     rm -f /tmp/flashmoe_new_config
 }
@@ -678,7 +676,7 @@ prompt_save_config() {
     echo ""
     
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
-        flashmoe_create_default_config quiet=1
+        flashmoe_create_default_config
         echo "Config saved to ~/.config/flash-moe/config"
     fi
     echo ""

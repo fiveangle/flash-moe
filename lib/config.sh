@@ -176,8 +176,11 @@ flashmoe_get() {
 # Create default config file
 # -----------------------------------------------------------------------------
 flashmoe_create_default_config() {
-    local quiet="${1:-0}"
     mkdir -p "$FLASHMOE_CONFIG_DIR"
+    local was_new=0
+    if [ ! -f "${FLASHMOE_CONFIG_DIR}/config" ]; then
+        was_new=1
+    fi
     cat > "${FLASHMOE_CONFIG_DIR}/config" << EOF
 # Flash-MoE Configuration
 # Generated on $(date)
@@ -202,7 +205,9 @@ SHOW_THINKING="${FLASHMOE_DEFAULT_SHOW_THINKING}"
 COLOR_OUTPUT="${FLASHMOE_DEFAULT_COLOR_OUTPUT}"
 EOF
     FLASHMOE_CONFIG_FILE="${FLASHMOE_CONFIG_DIR}/config"
-    [ "$quiet" = "0" ] && echo "Created default config at ${FLASHMOE_CONFIG_DIR}/config"
+    if [ "$was_new" -eq 1 ]; then
+        echo "Created default config at ${FLASHMOE_CONFIG_DIR}/config"
+    fi
 }
 
 # -----------------------------------------------------------------------------
