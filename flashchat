@@ -1094,10 +1094,47 @@ interactive_menu() {
                 ;;
             r|R)
                 echo ""
-                echo -n "Enter session ID: "
-                read session_id
-                if [ -n "$session_id" ]; then
-                    cmd_chat --resume "$session_id"
+                echo "Select a session to resume:"
+                echo ""
+                
+                # Get sessions list
+                local sessions_dir
+                sessions_dir=$(flashmoe_get_sessions_dir)
+                
+                if [ ! -d "$sessions_dir" ]; then
+                    echo "  (no sessions found)"
+                    echo ""
+                else
+                    local count=0
+                    local session_ids=()
+                    
+                    for f in "$sessions_dir"/*.jsonl; do
+                        [ -f "$f" ] || continue
+                        local session_id
+                        session_id=$(basename "$f" .jsonl)
+                        local lines
+                        lines=$(wc -l < "$f")
+                        count=$((count + 1))
+                        session_ids+=("$session_id")
+                        echo "  [$count] $session_id ($lines turns)"
+                    done
+                    
+                    if [ $count -eq 0 ]; then
+                        echo "  (no sessions)"
+                    else
+                        echo ""
+                        echo -n "Enter number or session ID: "
+                        read -r session_id
+                        
+                        # Check if input is a number
+                        if [[ "$session_id" =~ ^[0-9]+$ ]] && [ "$session_id" -le $count ] && [ "$session_id" -gt 0 ]; then
+                            session_id="${session_ids[$((session_id - 1))]}"
+                        fi
+                        
+                        if [ -n "$session_id" ]; then
+                            cmd_chat --resume "$session_id"
+                        fi
+                    fi
                 fi
                 ;;
             s|S)
