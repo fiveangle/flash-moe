@@ -292,8 +292,6 @@ cmd_config() {
             read -p "Continue? [Y/n] " -n 1 -r
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
-                rm -f "$config_file"
-                
                 echo "Step 1: Configuration Options"
                 echo "============================="
                 prompt_config_options
