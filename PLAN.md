@@ -121,8 +121,9 @@ Options:
    - Status shows running with PID
    - Verified serve --stop functionality
 
-5. **Chat client integration**
-   - Need to verify chat client connects properly to server
+5. **Chat client integration** ✅ COMPLETED
+   - Verified: chat auto-starts server, connects seamlessly, returns to menu
+   - Future: Show chat status in full TUI (see below)
 
 6. **Enhanced Session Resume in Interactive Menu**
    - Currently: prompts for session ID directly (user must know the ID)
@@ -153,3 +154,16 @@ Options:
 - Model path auto-detection from HuggingFace cache
 - Environment variables override config file settings
 - Interactive menu provides user-friendly interface
+
+---
+
+## Future: Full TUI Considerations
+
+When converting flashchat to a full TUI application, consider:
+
+1. **Show chat status** - Display if chat is active in status view
+2. **Inline chat** - Run chat within the TUI instead of spawning separate binary
+3. **Rich status** - Show model info, GPU usage, token count, etc.
+4. **Keybindings** - Vim-style keybindings (j/k for navigation)
+5. **Themes** - Color schemes for light/dark mode
+6. **Split views** - Server logs, session history, settings panels
