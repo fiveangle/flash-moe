@@ -316,7 +316,7 @@ cmd_config() {
         return
     fi
     
-    if [ -z "$config_file" ]; then
+    if [ ! -f "$config_file" ]; then
         echo "No config file found. Creating default..."
         flashmoe_create_default_config
         flashmoe_load_config
@@ -340,6 +340,7 @@ cmd_config() {
 cmd_config_interactive() {
     flashmoe_load_config
     
+    echo ""
     echo "=== Configure Settings ==="
     echo "  -Model: $(flashmoe_get MODEL_REPO)"
     echo "  -Experts quantization (4bit/2bit): $(flashmoe_get QUANTIZATION)"
@@ -350,19 +351,17 @@ cmd_config_interactive() {
     echo "  -Chat client API host IP: $(flashmoe_get SERVER_HOST)"
     echo "  -Show thinking tokens (0/1): $(flashmoe_get SHOW_THINKING)"
     echo "  -Color output (0/1): $(flashmoe_get COLOR_OUTPUT)"
+    unset REPLY
     read -p "Start edit config wizard? [Y/n]: " -n 1 -r
     echo ""
     
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # Create fresh config file
+    if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
         rm -f "$(flashmoe_get CONFIG_FILE)"
         
         echo ""
         echo "Step 1: Configuration Options"
         echo "============================="
         prompt_config_interactive
-        
-        echo ""
         echo "Configuration updated."
     else
         echo "Cancelled."
@@ -1037,8 +1036,6 @@ interactive_menu() {
         if check_model_downloaded && check_weights_extracted && check_vocab_exported && check_experts_extracted; then
             setup_status="Ready"
         fi
-        
-        echo ""
         echo "=================================================="
         echo "           Flash-MoE Management"
         echo "=================================================="
@@ -1107,7 +1104,6 @@ interactive_menu() {
                 cmd_serve --stop
                 ;;
             c|C)
-                echo ""
                 cmd_config_interactive
                 ;;
             l|L)
