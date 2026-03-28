@@ -125,19 +125,17 @@ Options:
    - Verified: chat auto-starts server, connects seamlessly, returns to menu
    - Future: Show chat status in full TUI (see below)
 
-6. **Enhanced Session Resume in Interactive Menu**
-   - Currently: prompts for session ID directly (user must know the ID)
-   - Planned: Present numbered list of existing sessions, allow selection by number
-   - Fallback: If input is not a number, treat as session ID directly
+6. **Enhanced Session Resume in Interactive Menu** ✅ COMPLETED
+   - Shows numbered list of sessions when resuming
+   - Accepts number (1, 2, 3) or session ID directly
    - Example:
      ```
      Select a session to resume:
-     
+
      [1] chat-1234567890 (5 turns)
      [2] chat-0987654321 (12 turns)
-     [3] my-session-name (3 turns)
-     
-     Enter number or session ID: 
+
+     Enter number or session ID:
      ```
 
 7. **Benchmark Commands**
