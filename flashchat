@@ -292,12 +292,12 @@ cmd_config() {
             read -p "Continue? [Y/n] " -n 1 -r
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
-                echo "Step 1: Configuration Options"
-                echo "============================="
+                echo "Configure Settings"
+                echo "=================="
                 prompt_config_options
                 
-                echo "Step 2: Setup Components"
-                echo "========================="
+                echo "Setup Components"
+                echo "================"
                 ensure_setup 1
                 
                 echo "Configuration saved."
@@ -348,8 +348,8 @@ cmd_config_interactive() {
     echo ""
     
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
-        echo "Step 1: Configuration Options"
-        echo "============================="
+        echo "Configure Settings"
+        echo "=================="
         prompt_config_interactive
         echo "Configuration updated."
     else
