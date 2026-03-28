@@ -102,6 +102,7 @@ Commands:
   serve             Start API server (auto-sets up if missing)
   serve --stop      Stop running server
   prompt "..."      Single prompt (auto-sets up if missing)
+  benchmark         Run benchmarks (run, verify, bench, moe, full, etc.)
   config            Edit configuration
   status            Show system status
   sessions          List sessions
@@ -1170,6 +1171,70 @@ interactive_menu() {
 }
 
 # -----------------------------------------------------------------------------
+# Command: benchmark
+# -----------------------------------------------------------------------------
+cmd_benchmark() {
+    local target=""
+    
+    if [ $# -eq 0 ]; then
+        echo "=== Available Benchmarks ==="
+        echo ""
+        echo "  run         - Single expert forward pass"
+        echo "  verify      - Metal vs CPU reference verification"
+        echo "  bench       - Benchmark single expert (10 iterations)"
+        echo "  moe         - Full MoE forward (K experts, single layer)"
+        echo "  moebench    - Benchmark MoE (10 iterations)"
+        echo "  full        - Full 60-layer forward (K=4)"
+        echo "  fullbench   - Benchmark full forward (3 iterations)"
+        echo ""
+        echo "Usage: flashchat benchmark <target>"
+        echo "Example: flashchat benchmark fullbench"
+        return
+    fi
+    
+    target="$1"
+    
+    cd "$SCRIPT_DIR/metal_infer"
+    
+    case "$target" in
+        run)
+            echo "Running: single expert forward pass..."
+            make run
+            ;;
+        verify)
+            echo "Running: Metal vs CPU verification..."
+            make verify
+            ;;
+        bench)
+            echo "Running: single expert benchmark (10 iterations)..."
+            make bench
+            ;;
+        moe)
+            echo "Running: MoE forward (K experts, single layer)..."
+            make moe
+            ;;
+        moebench)
+            echo "Running: MoE benchmark (10 iterations)..."
+            make moebench
+            ;;
+        full)
+            echo "Running: Full 60-layer forward (K=4)..."
+            make full
+            ;;
+        fullbench)
+            echo "Running: Full benchmark (3 iterations)..."
+            make fullbench
+            ;;
+        *)
+            echo "Unknown benchmark: $target"
+            echo "Run 'flashchat benchmark' to see available targets."
+            ;;
+    esac
+    
+    cd "$SCRIPT_DIR"
+}
+
+# -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 main() {
@@ -1207,6 +1272,9 @@ main() {
         prompt)
             ensure_setup
             cmd_prompt "$@"
+            ;;
+        benchmark)
+            cmd_benchmark "$@"
             ;;
         *)
             error "Unknown command: $command"
