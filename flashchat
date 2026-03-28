@@ -292,8 +292,6 @@ cmd_config() {
             read -p "Continue? [Y/n] " -n 1 -r
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
-                echo "Configure Settings"
-                echo "=================="
                 prompt_config_options
                 
                 echo "Setup Components"
@@ -348,8 +346,6 @@ cmd_config_interactive() {
     echo ""
     
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
-        echo "Configure Settings"
-        echo "=================="
         prompt_config_interactive
         echo "Configuration updated."
     else
@@ -395,8 +391,7 @@ prompt_config_interactive() {
     rm -f /tmp/flashmoe_new_config
     touch /tmp/flashmoe_new_config
     
-    echo ""
-    echo "=== Configure Settings === (Press Enter to accept default)"
+    echo "(Press Enter to accept default)"
     echo ""
     
     # Model Repository
