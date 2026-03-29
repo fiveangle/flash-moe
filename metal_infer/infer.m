@@ -5826,6 +5826,135 @@ static int extract_max_tokens(const char *buf, int default_val) {
     return atoi(p + 1);
 }
 
+// Tool definitions for OpenAI function calling
+#define MAX_TOOLS 16
+#define MAX_TOOL_NAME 64
+#define MAX_TOOL_DESC 512
+
+typedef struct {
+    char name[MAX_TOOL_NAME];
+    char description[MAX_TOOL_DESC];
+    char parameters[4096];
+    int has_parameters;
+} ToolDef;
+
+typedef struct {
+    ToolDef tools[MAX_TOOLS];
+    int count;
+    int enabled;
+} ToolContext;
+
+static void init_tool_context(ToolContext *ctx) {
+    ctx->count = 0;
+    ctx->enabled = 0;
+}
+
+static void free_tool_context(ToolContext *ctx) {
+    ctx->count = 0;
+    ctx->enabled = 0;
+}
+
+// Extract tools from JSON body. Returns 1 if tools found, 0 otherwise.
+static int extract_tools(const char *body, ToolDef *tools, int *tool_count) {
+    *tool_count = 0;
+    
+    // Look for "tools": [ ... ]
+    const char *tools_start = strstr(body, "\"tools\"");
+    if (!tools_start) return 0;
+    
+    // Find the opening bracket
+    const char *arr = strchr(tools_start, '[');
+    if (!arr) return 0;
+    
+    // Find matching closing bracket
+    int depth = 0;
+    const char *arr_end = arr;
+    while (*arr_end) {
+        if (*arr_end == '[') depth++;
+        else if (*arr_end == ']') { depth--; if (depth == 0) break; }
+        arr_end++;
+    }
+    if (depth != 0) return 0;
+    
+    // Parse each tool object
+    const char *obj = arr;
+    int count = 0;
+    
+    while (count < MAX_TOOLS && obj < arr_end) {
+        // Find next "type": "function" or just {
+        obj = strchr(obj, '{');
+        if (!obj || obj > arr_end) break;
+        
+        // Extract name
+        const char *name_start = strstr(obj, "\"name\"");
+        if (name_start && name_start < arr_end) {
+            name_start = strchr(name_start, ':');
+            if (name_start) {
+                name_start++;
+                // Skip whitespace and find opening quote
+                while (*name_start && (*name_start == ' ' || *name_start == '\t')) name_start++;
+                if (*name_start == '"') {
+                    name_start++;
+                    int i = 0;
+                    while (*name_start && *name_start != '"' && i < MAX_TOOL_NAME - 1) {
+                        tools[count].name[i++] = *name_start++;
+                    }
+                    tools[count].name[i] = '\0';
+                }
+            }
+        }
+        
+        // Extract description
+        const char *desc_start = strstr(obj, "\"description\"");
+        if (desc_start && desc_start < arr_end) {
+            desc_start = strchr(desc_start, ':');
+            if (desc_start) {
+                desc_start++;
+                while (*desc_start && (*desc_start == ' ' || *desc_start == '\t')) desc_start++;
+                if (*desc_start == '"') {
+                    desc_start++;
+                    int i = 0;
+                    while (*desc_start && *desc_start != '"' && i < MAX_TOOL_DESC - 1) {
+                        tools[count].description[i++] = *desc_start++;
+                    }
+                    tools[count].description[i] = '\0';
+                }
+            }
+        }
+        
+        // Extract parameters
+        const char *params_start = strstr(obj, "\"parameters\"");
+        if (params_start && params_start < arr_end) {
+            params_start = strchr(params_start, '{');
+            if (params_start) {
+                int depth_params = 0;
+                int i = 0;
+                tools[count].parameters[i++] = '{';
+                params_start++;
+                while (*params_start && i < 4095) {
+                    if (*params_start == '{') depth_params++;
+                    else if (*params_start == '}') {
+                        if (depth_params == 0) break;
+                        depth_params--;
+                    }
+                    tools[count].parameters[i++] = *params_start++;
+                }
+                tools[count].parameters[i] = '\0';
+                tools[count].has_parameters = (i > 1);
+            }
+        }
+        
+        if (tools[count].name[0]) {
+            count++;
+        }
+        
+        obj = strchr(obj + 1, '{');
+    }
+    
+    *tool_count = count;
+    return count > 0;
+}
+
 // Save a conversation turn to ~/.flash-moe/sessions/<session_id>.jsonl
 // Shared data store with the chat client.
 static void server_save_turn(const char *session_id, const char *role, const char *content) {
@@ -6290,6 +6419,17 @@ static void serve_loop(
             if (max_gen > 32768) max_gen = 32768;
             char req_session_id[64] = {0};
             int has_session = extract_session_id(body, req_session_id, sizeof(req_session_id));
+            
+            // Extract tools if provided
+            ToolDef tools[MAX_TOOLS];
+            int tool_count = 0;
+            int has_tools = extract_tools(body, tools, &tool_count);
+            if (has_tools) {
+                fprintf(stderr, "[serve] Tools enabled: %d function(s)\n", tool_count);
+                for (int i = 0; i < tool_count; i++) {
+                    fprintf(stderr, "  - %s: %s\n", tools[i].name, tools[i].description);
+                }
+            }
 
             // Extract user content from messages (mutates body — must be last)
             char *content = extract_last_content(body);
@@ -6477,6 +6617,10 @@ static void serve_loop(
             // Accumulate response for session persistence
             char *gen_response = calloc(1, 256 * 1024);
             int gen_resp_len = 0;
+            // Tool call state
+            int in_tool_call = 0;
+            char tool_call_buf[8192] = {0};
+            int tool_call_len = 0;
 
             for (int gen = 0; gen < max_gen; gen++) {
                 if (next_token == EOS_TOKEN_1 || next_token == EOS_TOKEN_2) {
@@ -6515,6 +6659,112 @@ static void serve_loop(
                     memcpy(gen_response + gen_resp_len, tok_str, tlen);
                     gen_resp_len += tlen;
                     gen_response[gen_resp_len] = 0;
+                    
+                    // ---- Tool call detection ----
+                    if (has_tools && tool_call_len < 8000) {
+                        memcpy(tool_call_buf + tool_call_len, tok_str, tlen);
+                        tool_call_len += tlen;
+                        tool_call_buf[tool_call_len] = 0;
+                        
+                        // Check for complete tool_call block
+                        char *tc_start = strstr(tool_call_buf, "<tool_call>");
+                        char *tc_end = strstr(tool_call_buf, "</tool_call>");
+                        
+                        if (tc_start && tc_end && (tc_end - tc_start) < 7000) {
+                            // Extract tool call content
+                            tc_start += 11;  // skip <tool_call>
+                            int tc_body_len = (int)(tc_end - tc_start);
+                            if (tc_body_len > 0 && tc_body_len < 7000) {
+                                char tc_body[7000] = {0};
+                                memcpy(tc_body, tc_start, tc_body_len);
+                                
+                                // Find command in the tool call
+                                char command[4096] = {0};
+                                char *cmd_key = strstr(tc_body, "\"command\"");
+                                if (cmd_key) {
+                                    cmd_key = strchr(cmd_key + 9, '"');
+                                    if (cmd_key) {
+                                        cmd_key++;
+                                        int ci = 0;
+                                        while (*cmd_key && *cmd_key != '"' && ci < 4095) {
+                                            if (*cmd_key == '\\' && *(cmd_key+1)) {
+                                                cmd_key++;
+                                                switch (*cmd_key) {
+                                                    case 'n': command[ci++] = '\n'; break;
+                                                    case '"': command[ci++] = '"'; break;
+                                                    case '\\': command[ci++] = '\\'; break;
+                                                    default: command[ci++] = *cmd_key; break;
+                                                }
+                                            } else {
+                                                command[ci++] = *cmd_key;
+                                            }
+                                            cmd_key++;
+                                        }
+                                    }
+                                }
+                                
+                                if (command[0]) {
+                                    fprintf(stderr, "[serve] Executing tool: %s\n", command);
+                                    
+                                    // Execute the command
+                                    FILE *proc = popen(command, "r");
+                                    char output[65536] = {0};
+                                    int out_len = 0;
+                                    if (proc) {
+                                        while (out_len < 65535) {
+                                            int ch = fgetc(proc);
+                                            if (ch == EOF) break;
+                                            output[out_len++] = (char)ch;
+                                        }
+                                        output[out_len] = 0;
+                                        pclose(proc);
+                                    }
+                                    
+                                    // Format as tool response and feed back to model
+                                    char tool_msg[70000];
+                                    snprintf(tool_msg, sizeof(tool_msg), 
+                                        "<tool_response>\n%s\n</tool_response>", output);
+                                    
+                                    // Tokenize and feed tool response
+                                    PromptTokens *tool_pt = tokenize_user_turn(tool_msg);
+                                    if (tool_pt) {
+                                        // Process tool response tokens
+                                        for (int ti = 0; ti < tool_pt->count; ti++) {
+                                            embed_lookup(wf, tool_pt->ids[ti], hidden);
+                                            for (int layer = 0; layer < NUM_LAYERS; layer++) {
+                                                int is_full = ((layer + 1) % FULL_ATTN_INTERVAL == 0);
+                                                fused_layer_forward(wf, layer, hidden,
+                                                                    is_full ? kv_caches[layer] : NULL,
+                                                                    is_full ? NULL : layer_states[layer],
+                                                                    pos,
+                                                                    layer_mmaps[layer] != MAP_FAILED ? layer_mmaps[layer] : NULL,
+                                                                    K, layer_fds[layer]);
+                                            }
+                                            pos++;
+                                        }
+                                        // Final logits after tool response
+                                        if (final_norm_w) {
+                                            float *normed = malloc(HIDDEN_DIM * sizeof(float));
+                                            cpu_rms_norm(hidden, final_norm_w, normed, HIDDEN_DIM, RMS_NORM_EPS);
+                                            memcpy(hidden, normed, HIDDEN_DIM * sizeof(float));
+                                            free(normed);
+                                        }
+                                        lm_head_forward(wf, hidden, logits);
+                                        next_token = cpu_argmax(logits, VOCAB_SIZE);
+                                        
+                                        free(tool_pt->ids);
+                                        free(tool_pt);
+                                    }
+                                    
+                                    // Reset tool call buffer
+                                    tool_call_len = 0;
+                                    tool_call_buf[0] = 0;
+                                    
+                                    continue;  // Continue with next token from tool response
+                                }
+                            }
+                        }
+                    }
                 }
                 if (sse_send_delta(client_fd, request_id, tok_str) < 0) {
                     fprintf(stderr, "[serve] %s client disconnected, stopping generation\n", request_id);
