@@ -1072,7 +1072,7 @@ interactive_menu() {
         echo "Status: $setup_status"
         echo "Model: $(flashmoe_get MODEL_REPO) ($(flashmoe_get QUANTIZATION))"
         echo "Server: $server_status"
-        echo "Select: [N]ew [R]esume [S]tart [T]op [C]onfig [L]ist [V]iew [Q]uit"
+        echo "Select: [N]ew [R]esume [S]tart [X]stop [C]onfig [L]ist [Q]uit"
         read -p "> " -n 1 -r
         
         case "$REPLY" in
@@ -1129,7 +1129,7 @@ interactive_menu() {
                 echo ""
                 cmd_serve
                 ;;
-            t|T)
+            x|X)
                 echo ""
                 cmd_serve --stop
                 ;;
@@ -1139,10 +1139,6 @@ interactive_menu() {
             l|L)
                 echo ""
                 cmd_sessions
-                ;;
-            v|V)
-                echo ""
-                cmd_status
                 ;;
             q|Q)
                 echo ""
