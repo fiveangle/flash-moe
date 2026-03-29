@@ -162,7 +162,7 @@ cmd_status() {
     fi
     
     echo ""
-    echo "Context window: $(flashmoe_get MAX_TOKENS)"
+    echo "Context window size: $(flashmoe_get MAX_TOKENS)"
     echo "Temperature: $(flashmoe_get TEMPERATURE)"
     echo "Top-p: $(flashmoe_get TOP_P)"
 }
@@ -317,7 +317,7 @@ cmd_config() {
     echo "=== Flash-MoE Configuration ==="
     echo ""
     echo "Model: $(flashmoe_get MODEL_REPO) ($(flashmoe_get QUANTIZATION))"
-    echo "Context window: $(flashmoe_get MAX_TOKENS) | Temperature: $(flashmoe_get TEMPERATURE) | Top-p: $(flashmoe_get TOP_P)"
+    echo "Context window size: $(flashmoe_get MAX_TOKENS) | Temperature: $(flashmoe_get TEMPERATURE) | Top-p: $(flashmoe_get TOP_P)"
     echo "Server: $(flashmoe_get SERVER_HOST):$(flashmoe_get SERVER_PORT)"
     echo "Show thinking: $(flashmoe_get SHOW_THINKING) | Color: $(flashmoe_get COLOR_OUTPUT)"
     echo ""
