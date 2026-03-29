@@ -347,7 +347,6 @@ cmd_config_interactive() {
     
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
         prompt_config_interactive
-        echo "Configuration updated."
     else
         echo "Cancelled."
     fi
@@ -457,9 +456,19 @@ prompt_config_interactive() {
     read -r REPLY
     echo "COLOR_OUTPUT=\"${REPLY:-$default_color}\"" >> /tmp/flashmoe_new_config
     
-    # Save config (always save, even if same - simpler than diff)
-    cp /tmp/flashmoe_new_config "$(flashmoe_get CONFIG_FILE)"
+    # Save config only if changed
+    local old_config
+    old_config=$(cat "$(flashmoe_get CONFIG_FILE)")
+    local new_config
+    new_config=$(cat /tmp/flashmoe_new_config)
     rm -f /tmp/flashmoe_new_config
+    
+    if [ "$old_config" = "$new_config" ]; then
+        echo "No changes made."
+    else
+        echo "$new_config" > "$(flashmoe_get CONFIG_FILE)"
+        echo "Configuration updated."
+    fi
 }
 
 # -----------------------------------------------------------------------------
