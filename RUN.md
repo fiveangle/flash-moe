@@ -19,12 +19,9 @@ Running `flashchat` with no arguments launches an interactive menu where you can
 
 ### Prerequisites
 
-1. Build the binaries:
-   ```bash
-   cd metal_infer && make
-   ```
-
-That's it! flashchat automatically creates a Python virtual environment with numpy on first run.
+That's it! flashchat automatically:
+- Creates a Python virtual environment with numpy on first run
+- Builds the binaries when needed (infer, chat)
 
 That's it! On first run, flashchat will automatically:
 - Download the model from HuggingFace (if not present)
