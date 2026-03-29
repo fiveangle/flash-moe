@@ -482,6 +482,27 @@ check_model_downloaded() {
     return $?
 }
 
+FLASHMOE_VENV=""
+
+ensure_venv() {
+    if [ -n "$FLASHMOE_VENV" ] && [ -f "$FLASHMOE_VENV/bin/python" ]; then
+        return 0
+    fi
+    
+    FLASHMOE_VENV="$SCRIPT_DIR/metal_infer/.venv"
+    
+    if [ ! -f "$FLASHMOE_VENV/bin/python" ]; then
+        echo "Creating Python virtual environment..."
+        python3 -m venv "$FLASHMOE_VENV"
+        "$FLASHMOE_VENV/bin/pip" install numpy -q
+    fi
+}
+
+run_python() {
+    ensure_venv
+    "$FLASHMOE_VENV/bin/python" "$@"
+}
+
 check_weights_extracted() {
     local weights_dir
     weights_dir=$(flashmoe_get WEIGHTS_DIR)
@@ -554,7 +575,7 @@ prompt_extract_weights() {
     
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
         cd "$SCRIPT_DIR/metal_infer"
-        python3 extract_weights.py --model "$(flashmoe_get MODEL_PATH)" --output "$weights_dir"
+        run_python extract_weights.py --model "$(flashmoe_get MODEL_PATH)" --output "$weights_dir"
         cd "$SCRIPT_DIR"
         echo "Weights extracted successfully."
     else
@@ -580,7 +601,7 @@ prompt_export_vocab() {
     
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
         cd "$SCRIPT_DIR/metal_infer"
-        python3 export_tokenizer.py "$model_path/tokenizer.json" "$weights_dir/vocab.bin"
+        run_python export_tokenizer.py "$model_path/tokenizer.json" "$weights_dir/vocab.bin"
         cd "$SCRIPT_DIR"
         echo "Vocabulary exported successfully."
     else
@@ -642,20 +663,20 @@ prompt_extract_experts() {
         echo "Estimated time: 30-60 minutes."
         echo ""
         cd "$SCRIPT_DIR"
-        python3 repack_experts.py --index ./expert_index.json
+        run_python repack_experts.py --index ./expert_index.json
         echo "4-bit experts extracted successfully."
     elif [ "$extraction_mode" = "2bit" ]; then
         echo ""
         echo "First extracting 4-bit experts..."
         cd "$SCRIPT_DIR"
-        python3 repack_experts.py --index ./expert_index.json
+        run_python repack_experts.py --index ./expert_index.json
         
         echo ""
         echo "Requantizing to 2-bit..."
         echo "Estimated time: 15-30 minutes."
         echo ""
         cd "$SCRIPT_DIR/metal_infer"
-        python3 repack_experts_2bit.py
+        run_python repack_experts_2bit.py
         echo "2-bit experts created successfully."
     fi
 }
@@ -750,7 +771,7 @@ ensure_setup() {
             else
                 # 4bit exists, just need 2bit
                 cd "$SCRIPT_DIR/metal_infer"
-                python3 repack_experts_2bit.py
+                run_python repack_experts_2bit.py
                 cd "$SCRIPT_DIR"
             fi
         fi
