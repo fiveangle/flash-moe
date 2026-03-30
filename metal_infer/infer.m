@@ -6287,8 +6287,9 @@ static char *build_tool_instructions(ToolDef *tools, int tool_count) {
         "\n\n## Tools\n"
         "You have access to functions. To execute a command, you MUST use the special tool_call format below.\n\n"
         "IMPORTANT - Use this EXACT format when you want to run a command:\n"
-        "<tool_call>\n{\"command\": \"ls -la\"}\n</tool_call>\n\n"
+        "<tool_call>\n{\"command\": \"ls -la\", \"description\": \"List all files\"}\n</tool_call>\n\n"
         "Do NOT just describe what you would do - you MUST use the tool_call format above.\n\n"
+        "The 'description' field should be a brief 3-5 word summary of what the command does.\n\n"
         "Available functions:\n");
     
     for (int i = 0; i < tool_count && pos < 14000; i++) {
@@ -6302,7 +6303,7 @@ static char *build_tool_instructions(ToolDef *tools, int tool_count) {
     
     pos += snprintf(instructions + pos, 16384 - pos,
         "\nRemember: When you need to run a command, output:\n"
-        "<tool_call>\n{\"command\": \"your command here\"}\n</tool_call>\n\n"
+        "<tool_call>\n{\"command\": \"your command here\", \"description\": \"Brief description\"}\n</tool_call>\n\n"
         "Then wait for the result before responding to the user.\n");
     
     return instructions;
@@ -6677,6 +6678,7 @@ static void serve_loop(
                 // ---- Restore state from system prompt snapshot ----
                 // Instead of resetting to zero, restore to the cached system prompt state.
                 // This skips re-prefilling the system prompt tokens (~20 tokens, ~6s saved).
+                fprintf(stderr, "[serve] Restoring from snapshot, sys_prompt_len=%d\n", sys_prompt_len);
                 for (int i = 0; i < NUM_LAYERS; i++) {
                     if (kv_caches[i] && kv_snapshots[i].k_snapshot) {
                         size_t sz = sys_prompt_len * kv_dim * sizeof(float);
@@ -6808,6 +6810,7 @@ static void serve_loop(
             }
             lm_head_forward(wf, hidden, logits);
             int next_token = cpu_argmax(logits, VOCAB_SIZE);
+            fprintf(stderr, "[serve] First token after prefill: %d\n", next_token);
 
             // ---- Auto-regressive generation with SSE streaming ----
             if (g_pred_enabled) {
@@ -6956,6 +6959,32 @@ static void serve_loop(
                                     }
                                 }
                                 
+                                // Fallback: look for "description" field (OpenCode uses this)
+                                if (ci == 0) {
+                                    char *desc_key = strstr(tc_body, "\"description\"");
+                                    if (desc_key) {
+                                        desc_key = strchr(desc_key + 12, '"');
+                                        if (desc_key) {
+                                            desc_key++;
+                                            ci = 0;
+                                            while (*desc_key && *desc_key != '"' && ci < 4095) {
+                                                if (*desc_key == '\\' && *(desc_key+1)) {
+                                                    desc_key++;
+                                                    switch (*desc_key) {
+                                                        case 'n': command[ci++] = '\n'; break;
+                                                        case '"': command[ci++] = '"'; break;
+                                                        case '\\': command[ci++] = '\\'; break;
+                                                        default: command[ci++] = *desc_key; break;
+                                                    }
+                                                } else {
+                                                    command[ci++] = *desc_key;
+                                                }
+                                                desc_key++;
+                                            }
+                                        }
+                                    }
+                                }
+                                
                                 // Fallback: look for "arguments": {"command": "..."}
                                 if (ci == 0) {
                                     char *args = strstr(tc_body, "\"arguments\"");
@@ -6982,9 +7011,68 @@ static void serve_loop(
                                     
                                     fprintf(stderr, "[serve] Returning tool_calls: %s(%s)\n", tool_call_id, command);
                                     
+                                    // Extract description if present
+                                    char description[256] = {0};
+                                    char *desc_key = strstr(tc_body, "\"description\"");
+                                    if (desc_key) {
+                                        desc_key = strchr(desc_key + 11, '"');
+                                        if (desc_key) {
+                                            desc_key++;
+                                            int di = 0;
+                                            while (*desc_key && *desc_key != '"' && di < 255) {
+                                                if (*desc_key == '\\' && *(desc_key+1)) {
+                                                    desc_key++;
+                                                    switch (*desc_key) {
+                                                        case 'n': description[di++] = '\n'; break;
+                                                        case '"': description[di++] = '"'; break;
+                                                        case '\\': description[di++] = '\\'; break;
+                                                        default: description[di++] = *desc_key; break;
+                                                    }
+                                                } else {
+                                                    description[di++] = *desc_key;
+                                                }
+                                                desc_key++;
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Build JSON with proper escaping
+                                    char json_args[8192];
+                                    char escaped_cmd[8192];
+                                    char escaped_desc[512];
+                                    
+                                    // Escape special characters for JSON
+                                    int ei = 0;
+                                    for (int ci = 0; command[ci] && ei < 8190; ci++) {
+                                        if (command[ci] == '"' || command[ci] == '\\') {
+                                            escaped_cmd[ei++] = '\\';
+                                        }
+                                        escaped_cmd[ei++] = command[ci];
+                                    }
+                                    escaped_cmd[ei] = '\0';
+                                    
+                                    // Escape description
+                                    ei = 0;
+                                    for (int di = 0; description[di] && ei < 510; di++) {
+                                        if (description[di] == '"' || description[di] == '\\') {
+                                            escaped_desc[ei++] = '\\';
+                                        }
+                                        escaped_desc[ei++] = description[di];
+                                    }
+                                    escaped_desc[ei] = '\0';
+                                    
+                                    if (description[0]) {
+                                        snprintf(json_args, sizeof(json_args), 
+                                            "{\"command\": \"%s\", \"description\": \"%s\"}", 
+                                            escaped_cmd, escaped_desc);
+                                    } else {
+                                        snprintf(json_args, sizeof(json_args), 
+                                            "{\"command\": \"%s\"}", escaped_cmd);
+                                    }
+                                    
                                     // Send SSE with tool_calls format (OpenAI-compatible)
                                     if (sse_send_tool_calls(client_fd, request_id, tool_call_id, 
-                                                           "bash", command) < 0) {
+                                                           "bash", json_args) < 0) {
                                         fprintf(stderr, "[serve] %s client disconnected during tool call\n", request_id);
                                         break;
                                     }
