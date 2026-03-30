@@ -644,6 +644,18 @@ prompt_extract_experts() {
     local quantization
     quantization=$(flashmoe_get QUANTIZATION)
     
+    local model_path
+    model_path=$(flashmoe_get MODEL_PATH)
+    
+    local expert_index_path=""
+    if [ -f "$model_path/expert_index.json" ]; then
+        expert_index_path="$model_path/expert_index.json"
+        echo "Using model-specific expert index: $expert_index_path"
+    else
+        expert_index_path="./expert_index.json"
+        echo "Using local expert index: $expert_index_path"
+    fi
+    
     echo ""
     echo "=== Extract Expert Weights ==="
     echo ""
@@ -653,6 +665,10 @@ prompt_extract_experts() {
     
     echo "Available disk space:"
     df -h . | tail -1
+    echo ""
+    
+    echo "Model: $model_path"
+    echo "Expert index: $expert_index_path"
     echo ""
     
     echo "Choose quantization mode:"
@@ -693,13 +709,13 @@ prompt_extract_experts() {
         echo "Estimated time: 30-60 minutes."
         echo ""
         cd "$SCRIPT_DIR"
-        run_python repack_experts.py --index ./expert_index.json
+        run_python repack_experts.py --index "$expert_index_path"
         echo "4-bit experts extracted successfully."
     elif [ "$extraction_mode" = "2bit" ]; then
         echo ""
         echo "First extracting 4-bit experts..."
         cd "$SCRIPT_DIR"
-        run_python repack_experts.py --index ./expert_index.json
+        run_python repack_experts.py --index "$expert_index_path"
         
         echo ""
         echo "Requantizing to 2-bit..."
