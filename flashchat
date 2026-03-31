@@ -140,11 +140,7 @@ cmd_status() {
     flashmoe_load_config
     
     echo "=== Flash-MoE Status ==="
-    echo ""
-    echo "Model: $(flashmoe_get MODEL_REPO)"
-    echo "Experts quantization: $(flashmoe_get QUANTIZATION)"
-    echo ""
-    echo "Server: $(flashmoe_get SERVER_HOST):$(flashmoe_get SERVER_PORT)"
+    echo "Server: http://$(flashmoe_get SERVER_HOST):$(flashmoe_get SERVER_PORT)"
     
     # Check if server is running
     local pid_file
@@ -160,17 +156,19 @@ cmd_status() {
     else
         echo "Server status: Not running"
     fi
-    
+
+    echo "API Endpoints:"
+    echo "    POST /v1/chat/completions  (chat)"
+    echo "    GET  /v1/models            (list models)"
+    echo "    GET  /health               (health check)"
     echo ""
-    echo "API Endpoints (when server running):"
-    echo "  POST /v1/chat/completions"
-    echo "  GET  /v1/models"
-    echo "  GET  /health"
-    
-    echo ""
-    echo "Context window size: $(flashmoe_get MAX_TOKENS)"
-    echo "Temperature: $(flashmoe_get TEMPERATURE)"
-    echo "Top-p: $(flashmoe_get TOP_P)"
+    echo "Model: $(flashmoe_get MODEL_REPO)"
+    echo "Experts quantization: $(flashmoe_get QUANTIZATION)"
+    echo "Context window size: $(flashmoe_get MAX_TOKENS) tokens"
+    echo "Temperature: $(flashmoe_get TEMPERATURE) (randomness - higher = more creative)"
+    echo "Top-p: $(flashmoe_get TOP_P) (nucleus sampling - controls diversity)"
+    echo "Show thinking: $(flashmoe_get SHOW_THINKING)"
+    echo "Color output: $(flashmoe_get COLOR_OUTPUT)"
 }
 
 # -----------------------------------------------------------------------------
@@ -323,8 +321,8 @@ cmd_config() {
     echo "=== Flash-MoE Configuration ==="
     echo ""
     echo "Model: $(flashmoe_get MODEL_REPO) ($(flashmoe_get QUANTIZATION))"
-    echo "Context window size: $(flashmoe_get MAX_TOKENS) | Temperature: $(flashmoe_get TEMPERATURE) | Top-p: $(flashmoe_get TOP_P)"
-    echo "Server: $(flashmoe_get SERVER_HOST):$(flashmoe_get SERVER_PORT)"
+    echo "Context window size: $(flashmoe_get MAX_TOKENS) tokens | Temperature: $(flashmoe_get TEMPERATURE) (creativity) | Top-p: $(flashmoe_get TOP_P) (nucleus)"
+    echo "Server: http://$(flashmoe_get SERVER_HOST):$(flashmoe_get SERVER_PORT)"
     echo "Show thinking: $(flashmoe_get SHOW_THINKING) | Color: $(flashmoe_get COLOR_OUTPUT)"
     echo ""
     echo "Edit: flashchat config --reset | Delete all: flashchat config --full-reset"
@@ -341,9 +339,9 @@ cmd_config_interactive() {
     echo "=== Configure Settings ==="
     echo "  -Model: $(flashmoe_get MODEL_REPO)"
     echo "  -Experts quantization (4bit/2bit): $(flashmoe_get QUANTIZATION)"
-    echo "  -Context window size: $(flashmoe_get MAX_TOKENS)"
-    echo "  -Temperature (0.0-2.0): $(flashmoe_get TEMPERATURE)"
-    echo "  -Top-p (0.0-1.0): $(flashmoe_get TOP_P)"
+    echo "  -Context window size: $(flashmoe_get MAX_TOKENS) tokens"
+    echo "  -Temperature (0.0-2.0): $(flashmoe_get TEMPERATURE) (randomness - higher = more creative)"
+    echo "  -Top-p (0.0-1.0): $(flashmoe_get TOP_P) (nucleus sampling - controls output diversity)"
     echo "  -Server API publishing port: $(flashmoe_get SERVER_PORT)"
     echo "  -Chat client API host IP: $(flashmoe_get SERVER_HOST)"
     echo "  -Show thinking tokens (0/1): $(flashmoe_get SHOW_THINKING)"
@@ -466,14 +464,14 @@ prompt_config_interactive() {
     # Temperature
     local default_temp
     default_temp=$(flashmoe_get TEMPERATURE)
-    printf "Temperature (0.0-2.0) [%s]: " "$default_temp"
+    printf "Temperature (0.0-2.0) [randomness - higher=creative, lower=focused] [%s]: " "$default_temp"
     read -r REPLY
     echo "TEMPERATURE=\"${REPLY:-$default_temp}\"" >> /tmp/flashmoe_new_config
     
     # Top P
     local default_top_p
     default_top_p=$(flashmoe_get TOP_P)
-    printf "Top-p (0.0-1.0) [%s]: " "$default_top_p"
+    printf "Top-p (0.0-1.0) [nucleus sampling - lower=focused, higher=diverse] [%s]: " "$default_top_p"
     read -r REPLY
     echo "TOP_P=\"${REPLY:-$default_top_p}\"" >> /tmp/flashmoe_new_config
     
@@ -533,13 +531,14 @@ check_model_downloaded() {
     quantization=$(flashmoe_get QUANTIZATION)
     
     # Check core model files (model_weights.bin + model_weights.json + vocab.bin)
-    if ! [ -f "$model_path/model_weights.bin" ] || \
-       ! [ -f "$model_path/model_weights.json" ] || \
+    # Note: model_weights are in metal_infer/, not in model path
+    if ! [ -f "$weights_dir/model_weights.bin" ] || \
+       ! [ -f "$weights_dir/model_weights.json" ] || \
        ! [ -f "$weights_dir/vocab.bin" ]; then
         return 1
     fi
     
-    # Check experts based on quantization setting
+    # Check experts based on quantization setting (experts are in model path)
     if [ "$quantization" = "2bit" ]; then
         local experts_2bit_dir
         experts_2bit_dir=$(flashmoe_get EXPERTS_2BIT_DIR)
@@ -1372,10 +1371,14 @@ interactive_menu() {
         if check_model_downloaded && check_weights_extracted && check_vocab_exported && check_experts_extracted; then
             setup_status="Ready"
         fi
+        
+        local server_url="http://$(flashmoe_get SERVER_HOST):$(flashmoe_get SERVER_PORT)/v1"
+        
+        echo ""
         echo "=================================================="
         echo "           Flash-MoE Management"
         echo "=================================================="
-        echo "Status: $setup_status"
+        echo "Status: $setup_status at $server_url"
         echo "Model: $(flashmoe_get MODEL_REPO) ($(flashmoe_get QUANTIZATION))"
         echo "Server: $server_status"
         echo "Select: [N]ew [R]esume [S]tart [X]stop [C]onfig [D]etails [Q]uit"
