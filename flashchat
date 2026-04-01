@@ -618,9 +618,11 @@ ensure_binaries() {
     fi
     
     echo "Binaries not found. Building..."
+    local old_pwd
+    old_pwd="$(pwd)"
     cd "$SCRIPT_DIR/metal_infer"
     make all chat
-    cd "$SCRIPT_DIR"
+    cd "$old_pwd"
     
     if check_binaries; then
         echo "Build complete."
@@ -1201,6 +1203,8 @@ cmd_serve() {
     export FLASHMOE_MODEL_PATH="$(flashmoe_get MODEL_PATH)"
     export FLASHMOE_SERVER_PORT="$server_port"
     export FLASHMOE_QUANTIZATION="$(flashmoe_get QUANTIZATION)"
+    export FLASHMOE_TEMPERATURE="$(flashmoe_get TEMPERATURE)"
+    export FLASHMOE_TOP_P="$(flashmoe_get TOP_P)"
     
     # Start server (redirect output to avoid mixing with TUI)
     ./infer --serve "$server_port" > /dev/null 2>&1 &
@@ -1217,6 +1221,7 @@ cmd_serve() {
         echo ""
         echo "Endpoints:"
         echo "  POST /v1/chat/completions"
+        echo "  POST /v1/responses"
         echo "  GET  /v1/models"
         echo "  GET  /health"
         echo ""
@@ -1341,7 +1346,7 @@ cmd_prompt() {
     # Send request
     curl -s -N -X POST "http://127.0.0.1:$server_port/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":$(flashmoe_get MAX_TOKENS)}"
+        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":$(flashmoe_get MAX_TOKENS),\"temperature\":$(flashmoe_get TEMPERATURE),\"top_p\":$(flashmoe_get TOP_P)}"
     echo ""
 }
 

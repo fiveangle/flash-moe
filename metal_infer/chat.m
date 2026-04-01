@@ -473,13 +473,15 @@ static char *stream_response(int sock, int show_thinking) {
     fclose(stream);
 
     printf(ANSI_RESET);  // ensure no style leaks
-    double gen_time = t_first > 0 ? now_ms() - t_first : 0;
+    double t_end = now_ms();
+    double ttft_ms = t_first > 0 ? t_first - t_start : 0;
+    double gen_time = t_first > 0 ? t_end - t_first : 0;
     int gen_tokens = tokens > 1 ? tokens - 1 : 0;
     printf("\n\n");
     if (gen_tokens > 0 && gen_time > 0)
         printf("[%d tokens, %.1f tok/s, TTFT %.1fs]\n\n",
                tokens, gen_tokens * 1000.0 / gen_time,
-               t_first > 0 ? (t_first - now_ms() + gen_time + (t_first - (now_ms() - gen_time))) / 1000.0 : 0);
+               ttft_ms / 1000.0);
 
     return response;
 }

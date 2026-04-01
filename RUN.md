@@ -160,6 +160,7 @@ When running the server (`./flashchat serve`):
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/v1/chat/completions` | POST | Chat completions (SSE streaming) |
+| `/v1/responses` | POST | Responses API compatibility endpoint |
 | `/v1/models` | GET | List available models |
 | `/health` | GET | Health check |
 
@@ -171,9 +172,63 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -d '{
     "model": "qwen3.5-397b-a17b",
     "messages": [{"role": "user", "content": "Hello"}],
-    "max_tokens": 100
+    "max_tokens": 100,
+    "temperature": 0.7,
+    "top_p": 0.9
   }'
 ```
+
+### Responses API Example
+
+```bash
+curl -X POST http://localhost:8000/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5-397b-a17b",
+    "input": "Summarize why Flash-MoE works on Apple Silicon.",
+    "max_output_tokens": 256,
+    "temperature": 0.2
+  }'
+```
+
+### Reasoning Off Example
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5-397b-a17b",
+    "messages": [{"role": "user", "content": "Give a short answer only."}],
+    "reasoning": false,
+    "stream": false
+  }'
+```
+
+## API Smoke Test
+
+From `metal_infer/`:
+
+```bash
+make api-smoke
+```
+
+This checks:
+- `GET /health`
+- `GET /v1/models`
+- `POST /v1/chat/completions` with and without streaming
+- `POST /v1/responses` with and without streaming
+- tool-call round trips for both endpoints
+
+If nothing is already listening on the configured port, the script starts `./infer --serve` automatically.
+
+When enabled, it also appends lightweight timing rows to:
+
+```bash
+metal_infer/api_perf_log.tsv
+```
+
+Each row records the date, branch, commit, endpoint scenario, request mode, duration, and derived stream tok/s when available. This is meant for spotting regressions over time, not for scientific benchmarking.
+The log also records the hostname, hardware model, RAM size, and a compact CPU/GPU core summary so results from different Apple Silicon machines can be compared later.
 
 ## Setup Artifacts
 

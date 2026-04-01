@@ -10,6 +10,7 @@
 #   make full     — full 60-layer MoE forward pass (K=4)
 #   make fullbench — benchmark full 60-layer forward (3 iterations)
 #   make chat     — build interactive chat TUI
+#   make api-smoke — run HTTP API smoke test
 #   make clean    — remove build artifacts
 #
 # Note: Metal shaders are compiled from source at runtime via
@@ -38,7 +39,7 @@ INFER_SRC = infer.m
 CHAT_TARGET = chat
 CHAT_SRC = chat.m
 
-.PHONY: all clean run verify bench moe moebench full fullbench fast metallib infer infer-run chat-run build-chat
+.PHONY: all clean run verify bench moe moebench full fullbench fast metallib infer infer-run chat-run build-chat api-smoke
 
 all: $(TARGET) $(INFER_TARGET)
 
@@ -101,3 +102,6 @@ infer-run: $(INFER_TARGET)
 
 chat-run: $(CHAT_TARGET)
 	./$(CHAT_TARGET) --k 4
+
+api-smoke: $(INFER_TARGET)
+	bash ./test_api_smoke.sh
