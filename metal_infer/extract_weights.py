@@ -39,7 +39,7 @@ def parse_safetensors_header(filepath):
 
 def get_default_model_path():
     """Get default model path from environment or compute from MODEL_REPO."""
-    model_repo = os.environ.get('FLASHMOE_MODEL_REPO', 'mlx-community/Qwen3.5-397B-A17B-4bit')
+    model_repo = os.environ.get('FLASHCHAT_MODEL_REPO', 'mlx-community/Qwen3.5-397B-A17B-4bit')
     escaped_repo = model_repo.replace('/', '--')
     hf_cache = os.path.expanduser('~/.cache/huggingface/hub')
     snapshot_dir = f"{hf_cache}/models--{escaped_repo}/snapshots"
@@ -57,10 +57,10 @@ def get_default_model_path():
 def main():
     parser = argparse.ArgumentParser(description='Extract non-expert weights to binary')
     parser.add_argument('--model', type=str,
-                        default=os.environ.get('FLASHMOE_MODEL_PATH') or get_default_model_path(),
-                        help='Path to model directory (or set FLASHMOE_MODEL_PATH)')
+                        default=os.environ.get('FLASHCHAT_MODEL_PATH') or get_default_model_path(),
+                        help='Path to model directory (or set FLASHCHAT_MODEL_PATH)')
     parser.add_argument('--output', type=str,
-                        default=os.environ.get('FLASHMOE_WEIGHTS_DIR') or '.',
+                        default=os.environ.get('FLASHCHAT_WEIGHTS_DIR') or '.',
                         help='Output directory for model_weights.bin and .json')
     parser.add_argument('--include-experts', action='store_true',
                         help='Also extract expert weights (huge, not recommended)')

@@ -1,8 +1,8 @@
 /*
- * chat.m — Interactive TUI chat client for Flash-MoE inference server
+ * chat.m — Interactive TUI chat client for Flashchat inference server
  *
  * Thin HTTP/SSE client with session persistence.
- * Conversations saved to ~/.flash-moe/sessions/<session_id>.jsonl
+ * Conversations saved to ~/.flashchat/sessions/<session_id>.jsonl
  * Resume with: ./chat --resume <session_id>
  *
  * Build:  make chat
@@ -25,7 +25,7 @@
 
 #define MAX_INPUT_LINE 4096
 #define MAX_RESPONSE (1024 * 1024)
-#define SESSIONS_DIR_BASE ".flash-moe/sessions"
+#define SESSIONS_DIR_BASE ".flashchat/sessions"
 
 static double now_ms(void) {
     struct timeval tv;
@@ -62,7 +62,7 @@ static void init_sessions_dir(void) {
     mkdir(g_sessions_dir, 0755);
     // Also create parent
     char parent[1024];
-    snprintf(parent, sizeof(parent), "%s/.flash-moe", home);
+    snprintf(parent, sizeof(parent), "%s/.flashchat", home);
     mkdir(parent, 0755);
     mkdir(g_sessions_dir, 0755);
 }
@@ -539,7 +539,7 @@ int main(int argc, char **argv) {
     }
 
     printf("==================================================\n");
-    printf("  Qwen3.5-397B-A17B Chat (Flash-MoE)\n");
+    printf("  Qwen3.5-397B-A17B Chat (Flashchat)\n");
     printf("==================================================\n");
     printf("  Server:  http://localhost:%d\n", port);
     printf("  Session: %s%s\n", session_id, resume_id ? " (resumed)" : "");
@@ -576,7 +576,7 @@ int main(int argc, char **argv) {
     // Set up linenoise: history, hints
     linenoiseSetMultiLine(1);  // allow multi-line input with arrow keys
     char history_path[1024];
-    snprintf(history_path, sizeof(history_path), "%s/.flash-moe/history", getenv("HOME") ?: "/tmp");
+    snprintf(history_path, sizeof(history_path), "%s/.flashchat/history", getenv("HOME") ?: "/tmp");
     linenoiseHistoryLoad(history_path);
     linenoiseHistorySetMaxLen(500);
 

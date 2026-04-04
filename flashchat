@@ -1,5 +1,5 @@
 #!/bin/bash
-# flashchat — Flash-MoE Unified Management CLI
+# flashchat — Flashchat Unified Management CLI
 #
 # Usage:
 #   flashchat [command] [options]
@@ -7,7 +7,7 @@
 # Commands:
 #   chat              Start chat (auto-sets up if missing)
 #   chat --resume ID  Resume session
-#   opencode          Launch OpenCode against the local Flash-MoE server
+#   opencode          Launch OpenCode against the local Flashchat server
 #   serve             Start API server (auto-sets up if missing)
 #   serve --stop      Stop running server
 #   prompt "..."      Single prompt (auto-sets up if missing)
@@ -23,9 +23,9 @@
 #
 # Configuration:
 #   Config is loaded from (priority highest to lowest):
-#     1. ./flashmoe.config (project-local)
-#     2. ~/.config/flash-moe/config (user)
-#     3. Environment variables (FLASHMOE_*)
+#     1. ./flashchat.config (project-local)
+#     2. ~/.config/flashchat/config (user)
+#     3. Environment variables (FLASHCHAT_*)
 #     4. Hardcoded defaults
 
 set -e
@@ -93,7 +93,7 @@ parse_global_opts() {
 # -----------------------------------------------------------------------------
 show_help() {
     cat << EOF
-flashchat — Flash-MoE Unified Management CLI
+flashchat — Flashchat Unified Management CLI
 
 Usage:
   flashchat [command] [options]
@@ -101,7 +101,7 @@ Usage:
 Commands:
   chat              Start chat interface
   chat --resume ID  Resume existing chat session
-  opencode          Launch OpenCode with the local Flash-MoE server
+  opencode          Launch OpenCode with the local Flashchat server
   serve             Start API server
   serve --stop      Stop running API server
   serve --stop --force  Force-stop running API server
@@ -119,18 +119,18 @@ Options:
 
 Configuration:
   Config is loaded from (priority highest to lowest):
-    1. ./flashmoe.config (project-local)
-    2. ~/.config/flash-moe/config (user)
-    3. Environment variables (FLASHMOE_*)
+    1. ./flashchat.config (project-local)
+    2. ~/.config/flashchat/config (user)
+    3. Environment variables (FLASHCHAT_*)
     4. Hardcoded defaults
 
 Environment variables:
-  FLASHMOE_MODEL_REPO      HuggingFace repo (default: mlx-community/Qwen3.5-397B-A17B-4bit)
-  FLASHMOE_MODEL_PATH      Override model path
-  FLASHMOE_QUANTIZATION   4bit or 2bit
-  FLASHMOE_SERVER_PORT    Server port
-  FLASHMOE_WEIGHTS_DIR    Path to extracted weights
-  FLASHMOE_EXPERTS_DIR   Path to expert weights
+  FLASHCHAT_MODEL_REPO      HuggingFace repo (default: mlx-community/Qwen3.5-397B-A17B-4bit)
+  FLASHCHAT_MODEL_PATH      Override model path
+  FLASHCHAT_QUANTIZATION   4bit or 2bit
+  FLASHCHAT_SERVER_PORT    Server port
+  FLASHCHAT_WEIGHTS_DIR    Path to extracted weights
+  FLASHCHAT_EXPERTS_DIR   Path to expert weights
 
 For more info, see: https://github.com/fiveangle/flash-moe
 EOF
@@ -139,7 +139,7 @@ EOF
 print_opencode_config_snippet() {
     local server_port="$1"
     local model_repo
-    model_repo="$(flashmoe_get MODEL_REPO)"
+    model_repo="$(flashchat_get MODEL_REPO)"
     cat << EOF
 Add this provider to ~/.config/opencode/opencode.jsonc:
 
@@ -201,14 +201,14 @@ check_opencode_config() {
 # Command: status
 # -----------------------------------------------------------------------------
 cmd_status() {
-    flashmoe_load_config
+    flashchat_load_config
     
-    echo "=== Flash-MoE Show Status ==="
-    echo "Server: http://$(flashmoe_get SERVER_HOST):$(flashmoe_get SERVER_PORT)"
+    echo "=== Flashchat Show Status ==="
+    echo "Server: http://$(flashchat_get SERVER_HOST):$(flashchat_get SERVER_PORT)"
     
     # Check if server is running
     local pid_file
-    pid_file=$(flashmoe_get_pid_file)
+    pid_file=$(flashchat_get_pid_file)
     if [ -f "$pid_file" ]; then
         local pid
         pid=$(cat "$pid_file")
@@ -226,13 +226,13 @@ cmd_status() {
     echo "    GET  /v1/models            (list models)"
     echo "    GET  /health               (health check)"
     echo ""
-    echo "Model: $(flashmoe_get MODEL_REPO)"
-    echo "Experts quantization: $(flashmoe_get QUANTIZATION)"
-    echo "Context window size: $(flashmoe_get MAX_TOKENS) tokens"
-    echo "Temperature: $(flashmoe_get TEMPERATURE) (randomness - higher = more creative)"
-    echo "Top-p: $(flashmoe_get TOP_P) (nucleus sampling - controls diversity)"
-    echo "Show thinking: $(flashmoe_get SHOW_THINKING)"
-    echo "Color output: $(flashmoe_get COLOR_OUTPUT)"
+    echo "Model: $(flashchat_get MODEL_REPO)"
+    echo "Experts quantization: $(flashchat_get QUANTIZATION)"
+    echo "Context window size: $(flashchat_get MAX_TOKENS) tokens"
+    echo "Temperature: $(flashchat_get TEMPERATURE) (randomness - higher = more creative)"
+    echo "Top-p: $(flashchat_get TOP_P) (nucleus sampling - controls diversity)"
+    echo "Show thinking: $(flashchat_get SHOW_THINKING)"
+    echo "Color output: $(flashchat_get COLOR_OUTPUT)"
 }
 
 # -----------------------------------------------------------------------------
@@ -260,10 +260,10 @@ cmd_sessions() {
         esac
     done
     
-    flashmoe_load_config
+    flashchat_load_config
     
     local sessions_dir
-    sessions_dir=$(flashmoe_get_sessions_dir)
+    sessions_dir=$(flashchat_get_sessions_dir)
     
     # Handle delete
     if [ -n "$delete_id" ]; then
@@ -330,10 +330,10 @@ cmd_config() {
         esac
     done
     
-    flashmoe_load_config
+    flashchat_load_config
     
     local config_file
-    config_file=$(flashmoe_get CONFIG_FILE)
+    config_file=$(flashchat_get CONFIG_FILE)
     
     # Handle reset modes
     if [ "$reset_mode" = "environment" ]; then
@@ -348,7 +348,7 @@ cmd_config() {
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 rm -f "$config_file"
-                rm -rf "$(flashmoe_get_sessions_dir)"
+                rm -rf "$(flashchat_get_sessions_dir)"
                 echo "Full reset complete. All data deleted."
             else
                 echo "Cancelled."
@@ -377,18 +377,18 @@ cmd_config() {
     
     if [ ! -f "$config_file" ]; then
         echo "No config file found. Using defaults..."
-        flashmoe_create_default_config
-        flashmoe_load_config
-        config_file=$(flashmoe_get CONFIG_FILE)
+        flashchat_create_default_config
+        flashchat_load_config
+        config_file=$(flashchat_get CONFIG_FILE)
     fi
     
-    echo "=== Flash-MoE Configuration ==="
+    echo "=== Flashchat Configuration ==="
     echo ""
-    echo "Model: $(flashmoe_get MODEL_REPO) ($(flashmoe_get QUANTIZATION))"
-    echo "Context window size: $(flashmoe_get MAX_TOKENS) tokens | Temperature: $(flashmoe_get TEMPERATURE) (creativity) | Top-p: $(flashmoe_get TOP_P) (nucleus)"
-    echo "Server: http://$(flashmoe_get SERVER_HOST):$(flashmoe_get SERVER_PORT)"
-    echo "Show thinking: $(flashmoe_get SHOW_THINKING) | Server debug: $(flashmoe_get SERVER_DEBUG) | HTTP log: $(flashmoe_get SERVER_HTTP_LOG) | Color: $(flashmoe_get COLOR_OUTPUT)"
-    echo "Server log path: $(flashmoe_get SERVER_LOG_PATH)"
+    echo "Model: $(flashchat_get MODEL_REPO) ($(flashchat_get QUANTIZATION))"
+    echo "Context window size: $(flashchat_get MAX_TOKENS) tokens | Temperature: $(flashchat_get TEMPERATURE) (creativity) | Top-p: $(flashchat_get TOP_P) (nucleus)"
+    echo "Server: http://$(flashchat_get SERVER_HOST):$(flashchat_get SERVER_PORT)"
+    echo "Show thinking: $(flashchat_get SHOW_THINKING) | Server debug: $(flashchat_get SERVER_DEBUG) | HTTP log: $(flashchat_get SERVER_HTTP_LOG) | Color: $(flashchat_get COLOR_OUTPUT)"
+    echo "Server log path: $(flashchat_get SERVER_LOG_PATH)"
     echo ""
     echo "Edit: flashchat config --reset | Delete all: flashchat config --full-reset"
     echo "File: $config_file"
@@ -398,7 +398,7 @@ cmd_config() {
 # Command: config (interactive menu version)
 # -----------------------------------------------------------------------------
 cmd_config_interactive() {
-    flashmoe_load_config
+    flashchat_load_config
     
     echo ""
     echo "=== Configuration Settings ==="
@@ -442,43 +442,43 @@ prompt_config_options() {
         local default_repo default_quant default_tokens default_temp
         local default_top_p default_port default_host default_log_path default_debug default_http_log default_think default_color
         
-        default_repo=$(flashmoe_get MODEL_REPO)
-        default_quant=$(flashmoe_get QUANTIZATION)
-        default_tokens=$(flashmoe_get MAX_TOKENS)
-        default_temp=$(flashmoe_get TEMPERATURE)
-        default_top_p=$(flashmoe_get TOP_P)
-        default_port=$(flashmoe_get SERVER_PORT)
-        default_host=$(flashmoe_get SERVER_HOST)
-        default_log_path=$(flashmoe_get SERVER_LOG_PATH)
-        default_debug=$(flashmoe_get SERVER_DEBUG)
-        default_http_log=$(flashmoe_get SERVER_HTTP_LOG)
-        default_think=$(flashmoe_get SHOW_THINKING)
-        default_color=$(flashmoe_get COLOR_OUTPUT)
+        default_repo=$(flashchat_get MODEL_REPO)
+        default_quant=$(flashchat_get QUANTIZATION)
+        default_tokens=$(flashchat_get MAX_TOKENS)
+        default_temp=$(flashchat_get TEMPERATURE)
+        default_top_p=$(flashchat_get TOP_P)
+        default_port=$(flashchat_get SERVER_PORT)
+        default_host=$(flashchat_get SERVER_HOST)
+        default_log_path=$(flashchat_get SERVER_LOG_PATH)
+        default_debug=$(flashchat_get SERVER_DEBUG)
+        default_http_log=$(flashchat_get SERVER_HTTP_LOG)
+        default_think=$(flashchat_get SHOW_THINKING)
+        default_color=$(flashchat_get COLOR_OUTPUT)
         
         # Create config file with defaults
-        flashmoe_create_default_config
+        flashchat_create_default_config
         
         echo "Using all defaults."
     fi
 }
 
 prompt_config_interactive() {
-    rm -f /tmp/flashmoe_new_config
-    touch /tmp/flashmoe_new_config
+    rm -f /tmp/flashchat_new_config
+    touch /tmp/flashchat_new_config
     
     echo "(Press Enter to accept default)"
     echo ""
     
     # Model Repository
     local default_repo
-    default_repo=$(flashmoe_get MODEL_REPO)
+    default_repo=$(flashchat_get MODEL_REPO)
     printf "Model repository [%s]: " "$default_repo"
     read -r REPLY
-    echo "MODEL_REPO=\"${REPLY:-$default_repo}\"" >> /tmp/flashmoe_new_config
+    echo "MODEL_REPO=\"${REPLY:-$default_repo}\"" >> /tmp/flashchat_new_config
     
     # Experts quantization
     local default_quant
-    default_quant=$(flashmoe_get QUANTIZATION)
+    default_quant=$(flashchat_get QUANTIZATION)
     local selected_quant=""
     printf "Experts quantization (2/4 for 2bit/4bit) [%s]: " "$default_quant"
     read -r selected_quant
@@ -523,89 +523,89 @@ prompt_config_interactive() {
         fi
     fi
     
-    echo "QUANTIZATION=\"$selected_quant\"" >> /tmp/flashmoe_new_config
+    echo "QUANTIZATION=\"$selected_quant\"" >> /tmp/flashchat_new_config
     
     # Max Tokens
     local default_tokens
-    default_tokens=$(flashmoe_get MAX_TOKENS)
+    default_tokens=$(flashchat_get MAX_TOKENS)
     printf "Context window limit [%s]: " "$default_tokens"
     read -r REPLY
-    echo "MAX_TOKENS=\"${REPLY:-$default_tokens}\"" >> /tmp/flashmoe_new_config
+    echo "MAX_TOKENS=\"${REPLY:-$default_tokens}\"" >> /tmp/flashchat_new_config
     
     # Temperature
     local default_temp
-    default_temp=$(flashmoe_get TEMPERATURE)
+    default_temp=$(flashchat_get TEMPERATURE)
     printf "Temperature (0.0-2.0) [randomness - higher=creative, lower=focused] [%s]: " "$default_temp"
     read -r REPLY
-    echo "TEMPERATURE=\"${REPLY:-$default_temp}\"" >> /tmp/flashmoe_new_config
+    echo "TEMPERATURE=\"${REPLY:-$default_temp}\"" >> /tmp/flashchat_new_config
     
     # Top P
     local default_top_p
-    default_top_p=$(flashmoe_get TOP_P)
+    default_top_p=$(flashchat_get TOP_P)
     printf "Top-p (0.0-1.0) [nucleus sampling - lower=focused, higher=diverse] [%s]: " "$default_top_p"
     read -r REPLY
-    echo "TOP_P=\"${REPLY:-$default_top_p}\"" >> /tmp/flashmoe_new_config
+    echo "TOP_P=\"${REPLY:-$default_top_p}\"" >> /tmp/flashchat_new_config
     
     # Server Port
     local default_port
-    default_port=$(flashmoe_get SERVER_PORT)
+    default_port=$(flashchat_get SERVER_PORT)
     printf "Server port [%s]: " "$default_port"
     read -r REPLY
-    echo "SERVER_PORT=\"${REPLY:-$default_port}\"" >> /tmp/flashmoe_new_config
+    echo "SERVER_PORT=\"${REPLY:-$default_port}\"" >> /tmp/flashchat_new_config
     
     # Server Host
     local default_host
-    default_host=$(flashmoe_get SERVER_HOST)
+    default_host=$(flashchat_get SERVER_HOST)
     printf "Server host [%s]: " "$default_host"
     read -r REPLY
-    echo "SERVER_HOST=\"${REPLY:-$default_host}\"" >> /tmp/flashmoe_new_config
+    echo "SERVER_HOST=\"${REPLY:-$default_host}\"" >> /tmp/flashchat_new_config
 
     # Server Log Path
     local default_log_path
     default_log_path=$(flashchat_get SERVER_LOG_PATH)
     printf "Server log path (file or directory) [%s]: " "$default_log_path"
     read -r REPLY
-    echo "SERVER_LOG_PATH=\"${REPLY:-$default_log_path}\"" >> /tmp/flashmoe_new_config
+    echo "SERVER_LOG_PATH=\"${REPLY:-$default_log_path}\"" >> /tmp/flashchat_new_config
 
     # Server Debug
     local default_debug
-    default_debug=$(flashmoe_get SERVER_DEBUG)
+    default_debug=$(flashchat_get SERVER_DEBUG)
     printf "Server debug logging artifacts (0/1) [%s]: " "$default_debug"
     read -r REPLY
-    echo "SERVER_DEBUG=\"${REPLY:-$default_debug}\"" >> /tmp/flashmoe_new_config
+    echo "SERVER_DEBUG=\"${REPLY:-$default_debug}\"" >> /tmp/flashchat_new_config
 
     # Server HTTP Log
     local default_http_log
-    default_http_log=$(flashmoe_get SERVER_HTTP_LOG)
+    default_http_log=$(flashchat_get SERVER_HTTP_LOG)
     printf "Server HTTP traffic log (0/1) [%s]: " "$default_http_log"
     read -r REPLY
-    echo "SERVER_HTTP_LOG=\"${REPLY:-$default_http_log}\"" >> /tmp/flashmoe_new_config
+    echo "SERVER_HTTP_LOG=\"${REPLY:-$default_http_log}\"" >> /tmp/flashchat_new_config
 
     # Show Thinking
     local default_think
-    default_think=$(flashmoe_get SHOW_THINKING)
+    default_think=$(flashchat_get SHOW_THINKING)
     printf "Show thinking tokens (0/1) [%s]: " "$default_think"
     read -r REPLY
-    echo "SHOW_THINKING=\"${REPLY:-$default_think}\"" >> /tmp/flashmoe_new_config
+    echo "SHOW_THINKING=\"${REPLY:-$default_think}\"" >> /tmp/flashchat_new_config
     
     # Color Output
     local default_color
-    default_color=$(flashmoe_get COLOR_OUTPUT)
+    default_color=$(flashchat_get COLOR_OUTPUT)
     printf "Color output (0/1) [%s]: " "$default_color"
     read -r REPLY
-    echo "COLOR_OUTPUT=\"${REPLY:-$default_color}\"" >> /tmp/flashmoe_new_config
+    echo "COLOR_OUTPUT=\"${REPLY:-$default_color}\"" >> /tmp/flashchat_new_config
     
     # Save config only if changed
     local old_config
-    old_config=$(cat "$(flashmoe_get CONFIG_FILE)")
+    old_config=$(cat "$(flashchat_get CONFIG_FILE)")
     local new_config
-    new_config=$(cat /tmp/flashmoe_new_config)
-    rm -f /tmp/flashmoe_new_config
+    new_config=$(cat /tmp/flashchat_new_config)
+    rm -f /tmp/flashchat_new_config
     
     if [ "$old_config" = "$new_config" ]; then
         echo "No changes made."
     else
-        echo "$new_config" > "$(flashmoe_get CONFIG_FILE)"
+        echo "$new_config" > "$(flashchat_get CONFIG_FILE)"
         echo "Configuration updated."
     fi
 }
@@ -616,11 +616,11 @@ prompt_config_interactive() {
 
 check_model_downloaded() {
     local model_path
-    model_path=$(flashmoe_get MODEL_PATH)
+    model_path=$(flashchat_get MODEL_PATH)
     local weights_dir
-    weights_dir=$(flashmoe_get WEIGHTS_DIR)
+    weights_dir=$(flashchat_get WEIGHTS_DIR)
     local quantization
-    quantization=$(flashmoe_get QUANTIZATION)
+    quantization=$(flashchat_get QUANTIZATION)
     
     if [[ "$weights_dir" != /* ]]; then
         weights_dir="${weights_dir#./}"
@@ -635,11 +635,11 @@ check_model_downloaded() {
     
     if [ "$quantization" = "2bit" ]; then
         local experts_2bit_dir
-        experts_2bit_dir=$(flashmoe_get EXPERTS_2BIT_DIR)
+        experts_2bit_dir=$(flashchat_get EXPERTS_2BIT_DIR)
         [ -f "$experts_2bit_dir/layer_59.bin" ] && return 0
     else
         local experts_dir
-        experts_dir=$(flashmoe_get EXPERTS_DIR)
+        experts_dir=$(flashchat_get EXPERTS_DIR)
         [ -f "$experts_dir/layer_59.bin" ] && return 0
     fi
     
@@ -648,7 +648,7 @@ check_model_downloaded() {
 
 check_model_extracted() {
     local model_path
-    model_path=$(flashmoe_get MODEL_PATH)
+    model_path=$(flashchat_get MODEL_PATH)
     
     # Check if original HuggingFace model exists (safetensors)
     [ -f "$model_path/model-00001-of-00046.safetensors" ] || \
@@ -678,25 +678,25 @@ prompt_extract_setup() {
     fi
 }
 
-FLASHMOE_VENV=""
+FLASHCHAT_VENV=""
 
 ensure_venv() {
-    if [ -n "$FLASHMOE_VENV" ] && [ -f "$FLASHMOE_VENV/bin/python" ]; then
+    if [ -n "$FLASHCHAT_VENV" ] && [ -f "$FLASHCHAT_VENV/bin/python" ]; then
         return 0
     fi
     
-    FLASHMOE_VENV="$SCRIPT_DIR/metal_infer/.venv"
+    FLASHCHAT_VENV="$SCRIPT_DIR/metal_infer/.venv"
     
-    if [ ! -f "$FLASHMOE_VENV/bin/python" ]; then
+    if [ ! -f "$FLASHCHAT_VENV/bin/python" ]; then
         echo "Creating Python virtual environment..."
-        python3 -m venv "$FLASHMOE_VENV"
-        "$FLASHMOE_VENV/bin/pip" install numpy -q
+        python3 -m venv "$FLASHCHAT_VENV"
+        "$FLASHCHAT_VENV/bin/pip" install numpy -q
     fi
 }
 
 run_python() {
     ensure_venv
-    "$FLASHMOE_VENV/bin/python" "$@"
+    "$FLASHCHAT_VENV/bin/python" "$@"
 }
 
 check_binaries() {
@@ -726,7 +726,7 @@ ensure_binaries() {
 
 check_weights_extracted() {
     local weights_dir
-    weights_dir=$(flashmoe_get WEIGHTS_DIR)
+    weights_dir=$(flashchat_get WEIGHTS_DIR)
     if [[ "$weights_dir" != /* ]]; then
         weights_dir="${weights_dir#./}"
         weights_dir="${SCRIPT_DIR}/$weights_dir"
@@ -737,7 +737,7 @@ check_weights_extracted() {
 
 check_vocab_exported() {
     local weights_dir
-    weights_dir=$(flashmoe_get WEIGHTS_DIR)
+    weights_dir=$(flashchat_get WEIGHTS_DIR)
     if [[ "$weights_dir" != /* ]]; then
         weights_dir="${weights_dir#./}"
         weights_dir="${SCRIPT_DIR}/$weights_dir"
@@ -748,7 +748,7 @@ check_vocab_exported() {
 
 check_experts_extracted() {
     local experts_dir
-    experts_dir=$(flashmoe_get EXPERTS_DIR)
+    experts_dir=$(flashchat_get EXPERTS_DIR)
     if [[ "$experts_dir" != /* ]]; then
         experts_dir="${experts_dir#./}"
         experts_dir="${SCRIPT_DIR}/$experts_dir"
@@ -759,7 +759,7 @@ check_experts_extracted() {
 
 check_experts_2bit_extracted() {
     local experts_2bit_dir
-    experts_2bit_dir=$(flashmoe_get EXPERTS_2BIT_DIR)
+    experts_2bit_dir=$(flashchat_get EXPERTS_2BIT_DIR)
     if [[ "$experts_2bit_dir" != /* ]]; then
         experts_2bit_dir="${experts_2bit_dir#./}"
         experts_2bit_dir="${SCRIPT_DIR}/$experts_2bit_dir"
@@ -790,7 +790,7 @@ check_hf_cli() {
 
 prompt_download_model() {
     local model_repo
-    model_repo=$(flashmoe_get MODEL_REPO)
+    model_repo=$(flashchat_get MODEL_REPO)
     
     echo ""
     echo "=== Model Download Required ==="
@@ -826,7 +826,7 @@ prompt_download_model() {
 
 prompt_extract_weights() {
     local weights_dir
-    weights_dir=$(flashmoe_get WEIGHTS_DIR)
+    weights_dir=$(flashchat_get WEIGHTS_DIR)
     
     echo ""
     echo "=== Extract Non-Expert Weights ==="
@@ -840,7 +840,7 @@ prompt_extract_weights() {
     
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
         cd "$SCRIPT_DIR/metal_infer"
-        run_python extract_weights.py --model "$(flashmoe_get MODEL_PATH)" --output "$weights_dir"
+        run_python extract_weights.py --model "$(flashchat_get MODEL_PATH)" --output "$weights_dir"
         cd "$SCRIPT_DIR"
         echo "Weights extracted successfully."
     else
@@ -851,9 +851,9 @@ prompt_extract_weights() {
 
 prompt_export_vocab() {
     local weights_dir
-    weights_dir=$(flashmoe_get WEIGHTS_DIR)
+    weights_dir=$(flashchat_get WEIGHTS_DIR)
     local model_path
-    model_path=$(flashmoe_get MODEL_PATH)
+    model_path=$(flashchat_get MODEL_PATH)
     
     echo ""
     echo "=== Export Vocabulary ==="
@@ -877,12 +877,12 @@ prompt_export_vocab() {
 
 prompt_extract_experts() {
     local quantization
-    quantization=$(flashmoe_get QUANTIZATION)
+    quantization=$(flashchat_get QUANTIZATION)
     
     local model_path
-    model_path=$(flashmoe_get MODEL_PATH)
+    model_path=$(flashchat_get MODEL_PATH)
     local model_repo
-    model_repo=$(flashmoe_get MODEL_REPO)
+    model_repo=$(flashchat_get MODEL_REPO)
     
     # Check if model is supported
     if [[ "$model_repo" != *"Qwen3.5-397B-A17B"* ]]; then
@@ -949,11 +949,11 @@ prompt_extract_experts() {
     
     # Update config with selection
     local config_file
-    config_file=$(flashmoe_get CONFIG_FILE)
+    config_file=$(flashchat_get CONFIG_FILE)
     if [ -n "$config_file" ] && [ -f "$config_file" ]; then
         sed -i '' "s/QUANTIZATION=.*/QUANTIZATION=\"$extraction_mode\"/" "$config_file"
     fi
-    export FLASHMOE_QUANTIZATION="$extraction_mode"
+    export FLASHCHAT_QUANTIZATION="$extraction_mode"
     
     if [ "$extraction_mode" = "4bit" ]; then
         echo ""
@@ -984,7 +984,7 @@ prompt_extract_experts() {
 
 prompt_save_config() {
     local config_file
-    config_file=$(flashmoe_get CONFIG_FILE)
+    config_file=$(flashchat_get CONFIG_FILE)
     
     if [ -n "$config_file" ] && [ -f "$config_file" ]; then
         return  # Already has config
@@ -999,8 +999,8 @@ prompt_save_config() {
     echo ""
     
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
-        flashmoe_create_default_config
-        echo "Config saved to ~/.config/flash-moe/config"
+        flashchat_create_default_config
+        echo "Config saved to ~/.config/flashchat/config"
     fi
     echo ""
 }
@@ -1017,7 +1017,7 @@ prompt_install_xcode_cli() {
     echo ""
     echo "=== Xcode Command Line Tools Required ==="
     echo ""
-    echo "Flash-MoE requires Xcode command line tools to compile the inference engine."
+    echo "Flashchat requires Xcode command line tools to compile the inference engine."
     echo "Without it, the model cannot run."
     echo ""
     read -p "Would you like to install Xcode CLI tools now? [Y/n] " -n 1 -r
@@ -1040,7 +1040,7 @@ ensure_setup() {
     local force="${1:-0}"
     
     set +e  # Temporarily disable exit on error for setup checks
-    flashmoe_load_config
+    flashchat_load_config
     
     logv "Checking setup status..."
     
@@ -1055,7 +1055,7 @@ ensure_setup() {
     fi
     
     # Re-load config after model download (path may have changed)
-    flashmoe_load_config
+    flashchat_load_config
     
     # Check weights
     if ! check_weights_extracted; then
@@ -1069,7 +1069,7 @@ ensure_setup() {
     
     # Check experts - always prompt if force mode, or if not extracted
     local quantization
-    quantization=$(flashmoe_get QUANTIZATION)
+    quantization=$(flashchat_get QUANTIZATION)
     
     if [ "$force" = "1" ]; then
         # Force mode: show current status and offer to re-extract
@@ -1133,7 +1133,7 @@ ensure_setup() {
 
 is_server_running() {
     local pid_file
-    pid_file=$(flashmoe_get_pid_file)
+    pid_file=$(flashchat_get_pid_file)
     if [ -f "$pid_file" ]; then
         local pid
         pid=$(cat "$pid_file")
@@ -1323,12 +1323,12 @@ cmd_serve() {
     done
     
     if [ "$stop" -eq 1 ]; then
-        flashmoe_load_config
+        flashchat_load_config
         set +m  # Disable job control to suppress termination messages
         local pid_file
         local server_port
-        pid_file=$(flashmoe_get_pid_file)
-        server_port="${port:-$(flashmoe_get SERVER_PORT)}"
+        pid_file=$(flashchat_get_pid_file)
+        server_port="${port:-$(flashchat_get SERVER_PORT)}"
 
         if [ -f "$pid_file" ]; then
             local pid
@@ -1389,7 +1389,7 @@ cmd_serve() {
     fi
     
     # Start server
-    flashmoe_load_config
+    flashchat_load_config
     
     # Verify model is available before starting server
     if ! check_model_downloaded; then
@@ -1413,11 +1413,11 @@ cmd_serve() {
     fi
     
     local server_port
-    server_port="${port:-$(flashmoe_get SERVER_PORT)}"
+    server_port="${port:-$(flashchat_get SERVER_PORT)}"
     
     # Check if WE already started the server
     if is_server_running; then
-        echo "Server is already running (PID: $(cat $(flashmoe_get_pid_file))."
+        echo "Server is already running (PID: $(cat $(flashchat_get_pid_file))."
         return
     fi
     
@@ -1438,20 +1438,20 @@ cmd_serve() {
     
     # Start server in background
     local pid_file
-    pid_file=$(flashmoe_get_pid_file)
+    pid_file=$(flashchat_get_pid_file)
     
     ensure_binaries
     cd "$SCRIPT_DIR/metal_infer"
     
     # Set environment for infer
-    export FLASHMOE_MODEL_PATH="$(flashmoe_get MODEL_PATH)"
-    export FLASHMOE_SERVER_PORT="$server_port"
-    export FLASHMOE_QUANTIZATION="$(flashmoe_get QUANTIZATION)"
-    export FLASHMOE_TEMPERATURE="$(flashmoe_get TEMPERATURE)"
-    export FLASHMOE_TOP_P="$(flashmoe_get TOP_P)"
-    export FLASHMOE_SERVER_LOG="$(flashmoe_get SERVER_LOG_PATH)"
-    export FLASHMOE_SERVER_DEBUG="$(flashmoe_get SERVER_DEBUG)"
-    export FLASHMOE_SERVER_HTTP_LOG="$(flashmoe_get SERVER_HTTP_LOG)"
+    export FLASHCHAT_MODEL_PATH="$(flashchat_get MODEL_PATH)"
+    export FLASHCHAT_SERVER_PORT="$server_port"
+    export FLASHCHAT_QUANTIZATION="$(flashchat_get QUANTIZATION)"
+    export FLASHCHAT_TEMPERATURE="$(flashchat_get TEMPERATURE)"
+    export FLASHCHAT_TOP_P="$(flashchat_get TOP_P)"
+    export FLASHCHAT_SERVER_LOG="$(flashchat_get SERVER_LOG_PATH)"
+    export FLASHCHAT_SERVER_DEBUG="$(flashchat_get SERVER_DEBUG)"
+    export FLASHCHAT_SERVER_HTTP_LOG="$(flashchat_get SERVER_HTTP_LOG)"
     
     # Start server (redirect output to avoid mixing with TUI)
     ./infer --serve "$server_port" > /dev/null 2>&1 &
@@ -1498,7 +1498,7 @@ cmd_chat() {
         esac
     done
     
-    flashmoe_load_config
+    flashchat_load_config
     
     # Verify model is available before starting chat
     if ! check_model_downloaded; then
@@ -1522,7 +1522,7 @@ cmd_chat() {
     fi
     
     local server_port
-    server_port="${port:-$(flashmoe_get SERVER_PORT)}"
+    server_port="${port:-$(flashchat_get SERVER_PORT)}"
     
     # Start server if not running
     if ! nc -z 127.0.0.1 "$server_port" 2>/dev/null; then
@@ -1551,7 +1551,7 @@ cmd_prompt() {
         error "Usage: flashchat prompt \"your message here\""
     fi
     
-    flashmoe_load_config
+    flashchat_load_config
     
     # Verify model is available before running prompt
     if ! check_model_downloaded; then
@@ -1576,7 +1576,7 @@ cmd_prompt() {
     fi
     
     local server_port
-    server_port=$(flashmoe_get SERVER_PORT)
+    server_port=$(flashchat_get SERVER_PORT)
     
     # Start server if not running
     if ! nc -z 127.0.0.1 "$server_port" 2>/dev/null; then
@@ -1593,7 +1593,7 @@ cmd_prompt() {
     # Send request
     curl -s -N -X POST "http://127.0.0.1:$server_port/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":$(flashmoe_get MAX_TOKENS),\"temperature\":$(flashmoe_get TEMPERATURE),\"top_p\":$(flashmoe_get TOP_P)}"
+        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":$(flashchat_get MAX_TOKENS),\"temperature\":$(flashchat_get TEMPERATURE),\"top_p\":$(flashchat_get TOP_P)}"
     echo ""
 }
 
@@ -1612,14 +1612,14 @@ cmd_opencode() {
         esac
     done
 
-    flashmoe_load_config
+    flashchat_load_config
 
     if ! command -v opencode >/dev/null 2>&1; then
         error "OpenCode CLI not found in PATH"
     fi
 
     local server_port
-    server_port="${port:-$(flashmoe_get SERVER_PORT)}"
+    server_port="${port:-$(flashchat_get SERVER_PORT)}"
 
     if ! nc -z 127.0.0.1 "$server_port" 2>/dev/null; then
         echo "Starting server..."
@@ -1644,11 +1644,11 @@ cmd_opencode() {
 # Interactive menu
 # -----------------------------------------------------------------------------
 interactive_menu() {
-    flashmoe_load_config
+    flashchat_load_config
     
     # Check if config exists
-    if [ ! -f "$(flashmoe_get CONFIG_FILE)" ]; then
-        echo "Welcome to Flash-MoE. Running initial setup..."
+    if [ ! -f "$(flashchat_get CONFIG_FILE)" ]; then
+        echo "Welcome to Flashchat. Running initial setup..."
         ensure_setup
     else
         # Config exists - verify model is available, download if missing
@@ -1674,12 +1674,12 @@ interactive_menu() {
     fi
     
     while true; do
-        flashmoe_load_config
+        flashchat_load_config
         
         local server_status="Not running"
         if is_server_running; then
             server_status="Running"
-        elif nc -z 127.0.0.1 "$(flashmoe_get SERVER_PORT)" 2>/dev/null; then
+        elif nc -z 127.0.0.1 "$(flashchat_get SERVER_PORT)" 2>/dev/null; then
             server_status="Running (external)"
         fi
         
@@ -1689,7 +1689,7 @@ interactive_menu() {
             setup_status="Ready"
         fi
         
-        local server_url="http://$(flashmoe_get SERVER_HOST):$(flashmoe_get SERVER_PORT)/v1"
+        local server_url="http://$(flashchat_get SERVER_HOST):$(flashchat_get SERVER_PORT)/v1"
         
         local server_line="Server: $server_status"
         if [ "$server_status" = "Running" ] || [ "$server_status" = "Running (external)" ]; then
@@ -1698,10 +1698,10 @@ interactive_menu() {
         
         echo ""
         echo "=================================================="
-        echo "           Flash-MoE Management"
+        echo "           Flashchat Management"
         echo "=================================================="
         echo "Status: $setup_status at $server_url"
-        echo "Model: $(flashmoe_get MODEL_REPO) ($(flashmoe_get QUANTIZATION))"
+        echo "Model: $(flashchat_get MODEL_REPO) ($(flashchat_get QUANTIZATION))"
         echo "$server_line"
         echo "[N]ew [D]ialog, Server [O]n/[O]ff, [S]how [C]onfig, [M]odels, [Q]uit"
         read -p "> " -n 1 -r
@@ -1718,7 +1718,7 @@ interactive_menu() {
                 
                 # Get sessions list
                 local sessions_dir
-                sessions_dir=$(flashmoe_get_sessions_dir)
+                sessions_dir=$(flashchat_get_sessions_dir)
                 
                 if [ ! -d "$sessions_dir" ]; then
                     echo "  (no chat dialogs found)"
@@ -1799,17 +1799,17 @@ interactive_menu() {
 # Command: clean
 # -----------------------------------------------------------------------------
 cmd_clean() {
-    flashmoe_load_config
+    flashchat_load_config
     
     local model_path
-    model_path=$(flashmoe_get MODEL_PATH)
+    model_path=$(flashchat_get MODEL_PATH)
     local quantization
-    quantization=$(flashmoe_get QUANTIZATION)
+    quantization=$(flashchat_get QUANTIZATION)
     
     while true; do
         echo "=== Clean Model Files ==="
         echo ""
-        echo "Current model: $(flashmoe_get MODEL_REPO)"
+        echo "Current model: $(flashchat_get MODEL_REPO)"
         echo ""
         
         # Original Hugging Face model shards
@@ -1948,11 +1948,11 @@ cmd_benchmark() {
     target="$1"
     
     # Load config and export environment variables
-    flashmoe_load_config
-    export FLASHMOE_MODEL_PATH="$(flashmoe_get MODEL_PATH)"
-    export FLASHMOE_WEIGHTS_DIR="$(flashmoe_get WEIGHTS_DIR)"
-    export FLASHMOE_EXPERTS_DIR="$(flashmoe_get EXPERTS_DIR)"
-    export FLASHMOE_QUANTIZATION="$(flashmoe_get QUANTIZATION)"
+    flashchat_load_config
+    export FLASHCHAT_MODEL_PATH="$(flashchat_get MODEL_PATH)"
+    export FLASHCHAT_WEIGHTS_DIR="$(flashchat_get WEIGHTS_DIR)"
+    export FLASHCHAT_EXPERTS_DIR="$(flashchat_get EXPERTS_DIR)"
+    export FLASHCHAT_QUANTIZATION="$(flashchat_get QUANTIZATION)"
     
     cd "$SCRIPT_DIR/metal_infer"
     ensure_binaries

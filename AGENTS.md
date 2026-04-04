@@ -24,7 +24,7 @@ The result? Over 3.5 tok/sec processing on a base model Macbook Pro M5. A feat u
 
 Below is Dan Wood's original "readme" and paper, which I highly recommend you read, as it offers a fascinating peek into both the ingenuity of the human mind, as well as a wonderful demonstration of the capability multiplier that enlisting the power of machine learning offers to see that human ingenuity to fruition. 
 
-Dan's original project was polished just enough to publish his whitepaper on his endevor, but was not ready for prime time regarding running by public, having fundemental issues with experts extraction and tokenizer problems. This project provides a means for the average joe to setup and run flash-moe on their own laptop without much fanfare.  Using the power of Opencode and the stealth coding-specific machine learning model Big Pickle, within a few hours I was able to turn this academic effort into a (hopefully) turn-key project you can run yourself.
+Dan's original project was polished just enough to publish his whitepaper on his endevor, but was not ready for prime time regarding running by public, having fundemental issues with experts extraction and tokenizer problems. This project provides a means for the average joe to setup and run flashchat on their own laptop without much fanfare.  Using the power of Opencode and the stealth coding-specific machine learning model Big Pickle, within a few hours I was able to turn this academic effort into a (hopefully) turn-key project you can run yourself.
 
 You can find more details in RUN.md (written entirely by Big Pickle through my guidance) but the meat of it should be to simply:
 <!-- git clone https://github.com/fiveangle/flash-moe -->
@@ -37,7 +37,7 @@ And follow the prompts to setup and run.
 Apple Silicon computer with at least 16GB of RAM
 At least 415GB of free space on on the Apple Fabric SSD builtin to your Mac
 xtools-cli
-# AGENTS.md — Flash-MoE Development Guide
+# AGENTS.md — Flashchat Development Guide
 
 This is a pure C/Metal inference engine for running 397B parameter MoE models on Apple Silicon.
 
@@ -115,6 +115,7 @@ clang -O2 test_lzfse.c -lcompression -o test_lzfse && ./test_lzfse
 - **Server-side debug visibility matters.** Changes to `infer --serve` should preserve persistent logging so background server runs remain debuggable without requiring an interactive launch.
 - **Server control commands must verify reality, not assume it.** Start/stop helpers should confirm health or actual process exit before reporting success or removing pid/state files.
 - **Persistent server/runtime toggles should be first-class config options.** If a setting is useful beyond one-off debugging, surface it through the config file and `flashchat` configuration wizard instead of leaving it env-only.
+- **When a functional block or milestone is complete, consider prompting for a commit checkpoint.** Don’t interrupt active debugging for every small change, but when a coherent unit of work lands, ask whether it should be committed before moving on.
 
 ### C/Objective-C
 

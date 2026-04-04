@@ -226,8 +226,8 @@ def get_default_index_path():
 def main():
     parser = argparse.ArgumentParser(description="Repack expert weights into contiguous per-layer binary files")
     parser.add_argument('--index', 
-                        default=os.environ.get('FLASHMOE_EXPERT_INDEX') or get_default_index_path(),
-                        help='Path to expert_index.json (or set FLASHMOE_EXPERT_INDEX)')
+                        default=os.environ.get('FLASHCHAT_EXPERT_INDEX') or get_default_index_path(),
+                        help='Path to expert_index.json (or set FLASHCHAT_EXPERT_INDEX)')
     parser.add_argument('--layers', default=None,
                         help='Layer spec: "all", "0-4", "0,5,10" (default: all)')
     parser.add_argument('--dry-run', action='store_true',

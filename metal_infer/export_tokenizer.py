@@ -25,7 +25,7 @@ import os
 
 def get_default_model_path():
     """Get default model path from environment or compute from MODEL_REPO."""
-    model_repo = os.environ.get('FLASHMOE_MODEL_REPO', 'mlx-community/Qwen3.5-397B-A17B-4bit')
+    model_repo = os.environ.get('FLASHCHAT_MODEL_REPO', 'mlx-community/Qwen3.5-397B-A17B-4bit')
     escaped_repo = model_repo.replace('/', '--')
     hf_cache = os.path.expanduser('~/.cache/huggingface/hub')
     snapshot_dir = f"{hf_cache}/models--{escaped_repo}/snapshots"
@@ -39,9 +39,9 @@ def get_default_model_path():
 
 
 def main():
-    # Allow env vars to override: FLASHMOE_MODEL_PATH, FLASHMOE_WEIGHTS_DIR
-    default_model_path = os.environ.get('FLASHMOE_MODEL_PATH') or get_default_model_path()
-    default_weights_dir = os.environ.get('FLASHMOE_WEIGHTS_DIR') or '.'
+    # Allow env vars to override: FLASHCHAT_MODEL_PATH, FLASHCHAT_WEIGHTS_DIR
+    default_model_path = os.environ.get('FLASHCHAT_MODEL_PATH') or get_default_model_path()
+    default_weights_dir = os.environ.get('FLASHCHAT_WEIGHTS_DIR') or '.'
     
     tok_path = sys.argv[1] if len(sys.argv) > 1 else f"{default_model_path}/tokenizer.json"
     out_path = sys.argv[2] if len(sys.argv) > 2 else f"{default_weights_dir}/vocab.bin"

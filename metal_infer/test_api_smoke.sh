@@ -22,7 +22,7 @@ usage() {
     cat <<EOF
 Usage: $0 [--port N] [--host HOST] [--no-start] [--no-perf-log] [--perf-log FILE]
 
-Smoke-tests the local Flash-MoE HTTP API:
+Smoke-tests the local Flashchat HTTP API:
   - GET /health
   - GET /v1
   - GET /v1/models
@@ -73,7 +73,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 BASE_URL="http://${HOST}:${PORT}"
-TMPDIR="$(mktemp -d /tmp/flashmoe-api-smoke.XXXXXX)"
+TMPDIR="$(mktemp -d /tmp/flashchat-api-smoke.XXXXXX)"
 
 cleanup() {
     if [[ $STARTED_SERVER -eq 1 && -n "${SERVER_PID}" ]]; then
@@ -313,7 +313,7 @@ assert_not_contains() {
     fi
 }
 
-echo "=== Flash-MoE API Smoke Test ==="
+echo "=== Flashchat API Smoke Test ==="
 echo "Base URL: ${BASE_URL}"
 populate_machine_metadata
 ensure_perf_log_header

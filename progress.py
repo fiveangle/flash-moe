@@ -1,5 +1,5 @@
 """
-progress.py — Visualize Flash-MoE experiment progress.
+progress.py — Visualize Flashchat experiment progress.
 Reads results.tsv, generates progress.png with distinct Q2 and Q4 tracks.
 
 Usage:
@@ -60,7 +60,7 @@ def main():
     n_q4 = len(df_397b[df_397b["quant"] == "Q4"])
     kept = df_397b[df_397b["status"] == "keep"]
 
-    print(f"\n=== Flash-MoE: 397B Model Journey ===")
+    print(f"\n=== Flashchat: 397B Model Journey ===")
     print(f"Total experiments: {n_total} ({n_397b} on 397B: {n_q2} Q2, {n_q4} Q4)")
 
     for q in ["Q2", "Q4"]:
@@ -135,7 +135,7 @@ def main():
 
     ax.set_ylabel("Tokens/second", fontsize=13, fontweight="bold")
     ax.set_xlabel("Experiment #", fontsize=12)
-    ax.set_title("Flash-MoE: Running Qwen3.5-397B on a MacBook Pro (M3 Max, 48GB)\n"
+    ax.set_title("Flashchat: Running Qwen3.5-397B on a MacBook Pro (M3 Max, 48GB)\n"
                  f"Q2: 2-bit experts (speed) | Q4: 4-bit experts (quality) | {n_397b} experiments",
                  fontsize=14, fontweight="bold")
     ax.legend(loc="upper left", fontsize=10, ncol=2)

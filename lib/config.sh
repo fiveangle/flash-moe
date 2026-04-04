@@ -1,36 +1,36 @@
 #!/bin/bash
-# config.sh — Flash-MoE Configuration Loader
+# config.sh — Flashchat Configuration Loader
 #
 # Loads configuration with the following priority (highest to lowest):
-#   1. ./flashmoe.config (project-local)
-#   2. ~/.config/flash-moe/config (user)
-#   3. Environment variables (FLASHMOE_*)
+#   1. ./flashchat.config (project-local)
+#   2. ~/.config/flashchat/config (user)
+#   3. Environment variables (FLASHCHAT_*)
 #   4. Hardcoded defaults
 #
 # Usage:
 #   source lib/config.sh          # Load config
-#   flashmoe_load_config          # Initialize (creates default if missing)
-#   flashmoe_get "KEY"           # Get a config value
+#   flashchat_load_config          # Initialize (creates default if missing)
+#   flashchat_get "KEY"           # Get a config value
 
 set -e
 
-FLASHMOE_CONFIG_DIR="${HOME}/.config/flash-moe"
-FLASHMOE_CONFIG_FILE=""
-FLASHMOE_PROJECT_CONFIG="./flashmoe.config"
+FLASHCHAT_CONFIG_DIR="${HOME}/.config/flashchat"
+FLASHCHAT_CONFIG_FILE=""
+FLASHCHAT_PROJECT_CONFIG="./flashchat.config"
 
 # Default configuration values
-FLASHMOE_DEFAULT_MODEL_REPO="mlx-community/Qwen3.5-397B-A17B-4bit"
-FLASHMOE_DEFAULT_QUANTIZATION="4bit"
-FLASHMOE_DEFAULT_MAX_TOKENS="8192"
-FLASHMOE_DEFAULT_SERVER_PORT="8000"
-FLASHMOE_DEFAULT_SERVER_HOST="127.0.0.1"
-FLASHMOE_DEFAULT_SERVER_LOG_PATH="${FLASHMOE_CONFIG_DIR}/logs/server.log"
-FLASHMOE_DEFAULT_SHOW_THINKING="0"
-FLASHMOE_DEFAULT_SERVER_DEBUG="0"
-FLASHMOE_DEFAULT_SERVER_HTTP_LOG="0"
-FLASHMOE_DEFAULT_COLOR_OUTPUT="1"
-FLASHMOE_DEFAULT_TEMPERATURE="0.7"
-FLASHMOE_DEFAULT_TOP_P="0.9"
+FLASHCHAT_DEFAULT_MODEL_REPO="mlx-community/Qwen3.5-397B-A17B-4bit"
+FLASHCHAT_DEFAULT_QUANTIZATION="4bit"
+FLASHCHAT_DEFAULT_MAX_TOKENS="8192"
+FLASHCHAT_DEFAULT_SERVER_PORT="8000"
+FLASHCHAT_DEFAULT_SERVER_HOST="127.0.0.1"
+FLASHCHAT_DEFAULT_SERVER_LOG_PATH="${FLASHCHAT_CONFIG_DIR}/logs/server.log"
+FLASHCHAT_DEFAULT_SHOW_THINKING="0"
+FLASHCHAT_DEFAULT_SERVER_DEBUG="0"
+FLASHCHAT_DEFAULT_SERVER_HTTP_LOG="0"
+FLASHCHAT_DEFAULT_COLOR_OUTPUT="1"
+FLASHCHAT_DEFAULT_TEMPERATURE="0.7"
+FLASHCHAT_DEFAULT_TOP_P="0.9"
 
 # Config values (set after loading)
 MODEL_REPO=""
@@ -55,7 +55,7 @@ EXPERTS_2BIT_DIR=""
 # -----------------------------------------------------------------------------
 # Detect the HuggingFace snapshot path from model repo
 # -----------------------------------------------------------------------------
-_flashmoe_detect_model_path() {
+_flashchat_detect_model_path() {
     local repo="$1"
     local escaped_repo="${repo//\//--}"
     local hf_cache="${HOME}/.cache/huggingface/hub"
@@ -79,14 +79,14 @@ _flashmoe_detect_model_path() {
 # -----------------------------------------------------------------------------
 # Compute derived paths based on config
 # -----------------------------------------------------------------------------
-_flashmoe_compute_paths() {
+_flashchat_compute_paths() {
     if [ -n "$MODEL_PATH" ]; then
         WEIGHTS_DIR="${WEIGHTS_DIR:-./metal_infer}"
         EXPERTS_DIR="${MODEL_PATH}/packed_experts"
         EXPERTS_2BIT_DIR="${MODEL_PATH}/packed_experts_2bit"
     else
         local detected_path
-        detected_path=$(_flashmoe_detect_model_path "$MODEL_REPO")
+        detected_path=$(_flashchat_detect_model_path "$MODEL_REPO")
         MODEL_PATH="$detected_path"
         WEIGHTS_DIR="${WEIGHTS_DIR:-./metal_infer}"
         EXPERTS_DIR="${detected_path}/packed_experts"
@@ -97,7 +97,7 @@ _flashmoe_compute_paths() {
 # -----------------------------------------------------------------------------
 # Load configuration from file
 # -----------------------------------------------------------------------------
-_flashmoe_source_config() {
+_flashchat_source_config() {
     local config_file="$1"
     if [ -f "$config_file" ]; then
         source "$config_file"
@@ -107,62 +107,62 @@ _flashmoe_source_config() {
 # -----------------------------------------------------------------------------
 # Load configuration with priority
 # -----------------------------------------------------------------------------
-flashmoe_load_config() {
+flashchat_load_config() {
     # Ensure config directory exists
-    mkdir -p "$FLASHMOE_CONFIG_DIR"
+    mkdir -p "$FLASHCHAT_CONFIG_DIR"
     
     # 1. Project-local config (highest priority)
-    if [ -f "$FLASHMOE_PROJECT_CONFIG" ]; then
-        FLASHMOE_CONFIG_FILE="$FLASHMOE_PROJECT_CONFIG"
-        _flashmoe_source_config "$FLASHMOE_PROJECT_CONFIG"
+    if [ -f "$FLASHCHAT_PROJECT_CONFIG" ]; then
+        FLASHCHAT_CONFIG_FILE="$FLASHCHAT_PROJECT_CONFIG"
+        _flashchat_source_config "$FLASHCHAT_PROJECT_CONFIG"
     # 2. User config
-    elif [ -f "${FLASHMOE_CONFIG_DIR}/config" ]; then
-        FLASHMOE_CONFIG_FILE="${FLASHMOE_CONFIG_DIR}/config"
-        _flashmoe_source_config "${FLASHMOE_CONFIG_DIR}/config"
+    elif [ -f "${FLASHCHAT_CONFIG_DIR}/config" ]; then
+        FLASHCHAT_CONFIG_FILE="${FLASHCHAT_CONFIG_DIR}/config"
+        _flashchat_source_config "${FLASHCHAT_CONFIG_DIR}/config"
     # 3. No config file - use default path
     else
-        FLASHMOE_CONFIG_FILE="${FLASHMOE_CONFIG_DIR}/config"
+        FLASHCHAT_CONFIG_FILE="${FLASHCHAT_CONFIG_DIR}/config"
     fi
     
     # 3. Environment variables override
-    [ -n "$FLASHMOE_MODEL_REPO" ] && MODEL_REPO="$FLASHMOE_MODEL_REPO"
-    [ -n "$FLASHMOE_MODEL_PATH" ] && MODEL_PATH="$FLASHMOE_MODEL_PATH"
-    [ -n "$FLASHMOE_QUANTIZATION" ] && QUANTIZATION="$FLASHMOE_QUANTIZATION"
-    [ -n "$FLASHMOE_MAX_TOKENS" ] && MAX_TOKENS="$FLASHMOE_MAX_TOKENS"
-    [ -n "$FLASHMOE_SERVER_PORT" ] && SERVER_PORT="$FLASHMOE_SERVER_PORT"
-    [ -n "$FLASHMOE_SERVER_HOST" ] && SERVER_HOST="$FLASHMOE_SERVER_HOST"
-    [ -n "$FLASHMOE_SERVER_LOG" ] && SERVER_LOG_PATH="$FLASHMOE_SERVER_LOG"
-    [ -n "$FLASHMOE_SHOW_THINKING" ] && SHOW_THINKING="$FLASHMOE_SHOW_THINKING"
-    [ -n "$FLASHMOE_SERVER_DEBUG" ] && SERVER_DEBUG="$FLASHMOE_SERVER_DEBUG"
-    [ -n "$FLASHMOE_SERVER_HTTP_LOG" ] && SERVER_HTTP_LOG="$FLASHMOE_SERVER_HTTP_LOG"
-    [ -n "$FLASHMOE_COLOR_OUTPUT" ] && COLOR_OUTPUT="$FLASHMOE_COLOR_OUTPUT"
-    [ -n "$FLASHMOE_TEMPERATURE" ] && TEMPERATURE="$FLASHMOE_TEMPERATURE"
-    [ -n "$FLASHMOE_TOP_P" ] && TOP_P="$FLASHMOE_TOP_P"
-    [ -n "$FLASHMOE_WEIGHTS_DIR" ] && WEIGHTS_DIR="$FLASHMOE_WEIGHTS_DIR"
-    [ -n "$FLASHMOE_EXPERTS_DIR" ] && EXPERTS_DIR="$FLASHMOE_EXPERTS_DIR"
+    [ -n "$FLASHCHAT_MODEL_REPO" ] && MODEL_REPO="$FLASHCHAT_MODEL_REPO"
+    [ -n "$FLASHCHAT_MODEL_PATH" ] && MODEL_PATH="$FLASHCHAT_MODEL_PATH"
+    [ -n "$FLASHCHAT_QUANTIZATION" ] && QUANTIZATION="$FLASHCHAT_QUANTIZATION"
+    [ -n "$FLASHCHAT_MAX_TOKENS" ] && MAX_TOKENS="$FLASHCHAT_MAX_TOKENS"
+    [ -n "$FLASHCHAT_SERVER_PORT" ] && SERVER_PORT="$FLASHCHAT_SERVER_PORT"
+    [ -n "$FLASHCHAT_SERVER_HOST" ] && SERVER_HOST="$FLASHCHAT_SERVER_HOST"
+    [ -n "$FLASHCHAT_SERVER_LOG" ] && SERVER_LOG_PATH="$FLASHCHAT_SERVER_LOG"
+    [ -n "$FLASHCHAT_SHOW_THINKING" ] && SHOW_THINKING="$FLASHCHAT_SHOW_THINKING"
+    [ -n "$FLASHCHAT_SERVER_DEBUG" ] && SERVER_DEBUG="$FLASHCHAT_SERVER_DEBUG"
+    [ -n "$FLASHCHAT_SERVER_HTTP_LOG" ] && SERVER_HTTP_LOG="$FLASHCHAT_SERVER_HTTP_LOG"
+    [ -n "$FLASHCHAT_COLOR_OUTPUT" ] && COLOR_OUTPUT="$FLASHCHAT_COLOR_OUTPUT"
+    [ -n "$FLASHCHAT_TEMPERATURE" ] && TEMPERATURE="$FLASHCHAT_TEMPERATURE"
+    [ -n "$FLASHCHAT_TOP_P" ] && TOP_P="$FLASHCHAT_TOP_P"
+    [ -n "$FLASHCHAT_WEIGHTS_DIR" ] && WEIGHTS_DIR="$FLASHCHAT_WEIGHTS_DIR"
+    [ -n "$FLASHCHAT_EXPERTS_DIR" ] && EXPERTS_DIR="$FLASHCHAT_EXPERTS_DIR"
     
     # 4. Apply defaults for any missing values
-    MODEL_REPO="${MODEL_REPO:-$FLASHMOE_DEFAULT_MODEL_REPO}"
-    QUANTIZATION="${QUANTIZATION:-$FLASHMOE_DEFAULT_QUANTIZATION}"
-    MAX_TOKENS="${MAX_TOKENS:-$FLASHMOE_DEFAULT_MAX_TOKENS}"
-    SERVER_PORT="${SERVER_PORT:-$FLASHMOE_DEFAULT_SERVER_PORT}"
-    SERVER_HOST="${SERVER_HOST:-$FLASHMOE_DEFAULT_SERVER_HOST}"
-    SERVER_LOG_PATH="${SERVER_LOG_PATH:-$FLASHMOE_DEFAULT_SERVER_LOG_PATH}"
-    SHOW_THINKING="${SHOW_THINKING:-$FLASHMOE_DEFAULT_SHOW_THINKING}"
-    SERVER_DEBUG="${SERVER_DEBUG:-$FLASHMOE_DEFAULT_SERVER_DEBUG}"
-    SERVER_HTTP_LOG="${SERVER_HTTP_LOG:-$FLASHMOE_DEFAULT_SERVER_HTTP_LOG}"
-    COLOR_OUTPUT="${COLOR_OUTPUT:-$FLASHMOE_DEFAULT_COLOR_OUTPUT}"
-    TEMPERATURE="${TEMPERATURE:-$FLASHMOE_DEFAULT_TEMPERATURE}"
-    TOP_P="${TOP_P:-$FLASHMOE_DEFAULT_TOP_P}"
+    MODEL_REPO="${MODEL_REPO:-$FLASHCHAT_DEFAULT_MODEL_REPO}"
+    QUANTIZATION="${QUANTIZATION:-$FLASHCHAT_DEFAULT_QUANTIZATION}"
+    MAX_TOKENS="${MAX_TOKENS:-$FLASHCHAT_DEFAULT_MAX_TOKENS}"
+    SERVER_PORT="${SERVER_PORT:-$FLASHCHAT_DEFAULT_SERVER_PORT}"
+    SERVER_HOST="${SERVER_HOST:-$FLASHCHAT_DEFAULT_SERVER_HOST}"
+    SERVER_LOG_PATH="${SERVER_LOG_PATH:-$FLASHCHAT_DEFAULT_SERVER_LOG_PATH}"
+    SHOW_THINKING="${SHOW_THINKING:-$FLASHCHAT_DEFAULT_SHOW_THINKING}"
+    SERVER_DEBUG="${SERVER_DEBUG:-$FLASHCHAT_DEFAULT_SERVER_DEBUG}"
+    SERVER_HTTP_LOG="${SERVER_HTTP_LOG:-$FLASHCHAT_DEFAULT_SERVER_HTTP_LOG}"
+    COLOR_OUTPUT="${COLOR_OUTPUT:-$FLASHCHAT_DEFAULT_COLOR_OUTPUT}"
+    TEMPERATURE="${TEMPERATURE:-$FLASHCHAT_DEFAULT_TEMPERATURE}"
+    TOP_P="${TOP_P:-$FLASHCHAT_DEFAULT_TOP_P}"
     
     # Compute derived paths
-    _flashmoe_compute_paths
+    _flashchat_compute_paths
 }
 
 # -----------------------------------------------------------------------------
 # Get a config value
 # -----------------------------------------------------------------------------
-flashmoe_get() {
+flashchat_get() {
     local key="$1"
     case "$key" in
         MODEL_REPO) echo "$MODEL_REPO" ;;
@@ -181,8 +181,8 @@ flashmoe_get() {
         WEIGHTS_DIR) echo "$WEIGHTS_DIR" ;;
         EXPERTS_DIR) echo "$EXPERTS_DIR" ;;
         EXPERTS_2BIT_DIR) echo "$EXPERTS_2BIT_DIR" ;;
-        CONFIG_FILE) echo "$FLASHMOE_CONFIG_FILE" ;;
-        CONFIG_DIR) echo "$FLASHMOE_CONFIG_DIR" ;;
+        CONFIG_FILE) echo "$FLASHCHAT_CONFIG_FILE" ;;
+        CONFIG_DIR) echo "$FLASHCHAT_CONFIG_DIR" ;;
         *) echo "" ;;
     esac
 }
@@ -190,63 +190,63 @@ flashmoe_get() {
 # -----------------------------------------------------------------------------
 # Create default config file
 # -----------------------------------------------------------------------------
-flashmoe_create_default_config() {
-    mkdir -p "$FLASHMOE_CONFIG_DIR"
-    cat > "${FLASHMOE_CONFIG_DIR}/config" << EOF
-# Flash-MoE Configuration
+flashchat_create_default_config() {
+    mkdir -p "$FLASHCHAT_CONFIG_DIR"
+    cat > "${FLASHCHAT_CONFIG_DIR}/config" << EOF
+# Flashchat Configuration
 # Generated on $(date)
 
 # Model Settings
-MODEL_REPO="${FLASHMOE_DEFAULT_MODEL_REPO}"
+MODEL_REPO="${FLASHCHAT_DEFAULT_MODEL_REPO}"
 
 # Quantization: 4bit or 2bit
-QUANTIZATION="${FLASHMOE_DEFAULT_QUANTIZATION}"
+QUANTIZATION="${FLASHCHAT_DEFAULT_QUANTIZATION}"
 
 # Generation Defaults
-MAX_TOKENS="${FLASHMOE_DEFAULT_MAX_TOKENS}"
-TEMPERATURE="${FLASHMOE_DEFAULT_TEMPERATURE}"
-TOP_P="${FLASHMOE_DEFAULT_TOP_P}"
+MAX_TOKENS="${FLASHCHAT_DEFAULT_MAX_TOKENS}"
+TEMPERATURE="${FLASHCHAT_DEFAULT_TEMPERATURE}"
+TOP_P="${FLASHCHAT_DEFAULT_TOP_P}"
 
 # Server Settings
-SERVER_PORT="${FLASHMOE_DEFAULT_SERVER_PORT}"
-SERVER_HOST="${FLASHMOE_DEFAULT_SERVER_HOST}"
-SERVER_LOG_PATH="${FLASHMOE_DEFAULT_SERVER_LOG_PATH}"
-SERVER_DEBUG="${FLASHMOE_DEFAULT_SERVER_DEBUG}"
-SERVER_HTTP_LOG="${FLASHMOE_DEFAULT_SERVER_HTTP_LOG}"
+SERVER_PORT="${FLASHCHAT_DEFAULT_SERVER_PORT}"
+SERVER_HOST="${FLASHCHAT_DEFAULT_SERVER_HOST}"
+SERVER_LOG_PATH="${FLASHCHAT_DEFAULT_SERVER_LOG_PATH}"
+SERVER_DEBUG="${FLASHCHAT_DEFAULT_SERVER_DEBUG}"
+SERVER_HTTP_LOG="${FLASHCHAT_DEFAULT_SERVER_HTTP_LOG}"
 
 # UI Settings
-SHOW_THINKING="${FLASHMOE_DEFAULT_SHOW_THINKING}"
-COLOR_OUTPUT="${FLASHMOE_DEFAULT_COLOR_OUTPUT}"
+SHOW_THINKING="${FLASHCHAT_DEFAULT_SHOW_THINKING}"
+COLOR_OUTPUT="${FLASHCHAT_DEFAULT_COLOR_OUTPUT}"
 EOF
-    FLASHMOE_CONFIG_FILE="${FLASHMOE_CONFIG_DIR}/config"
+    FLASHCHAT_CONFIG_FILE="${FLASHCHAT_CONFIG_DIR}/config"
 }
 
 # -----------------------------------------------------------------------------
 # Check if config exists
 # -----------------------------------------------------------------------------
-flashmoe_has_config() {
-    [ -f "$FLASHMOE_PROJECT_CONFIG" ] || [ -f "${FLASHMOE_CONFIG_DIR}/config" ]
+flashchat_has_config() {
+    [ -f "$FLASHCHAT_PROJECT_CONFIG" ] || [ -f "${FLASHCHAT_CONFIG_DIR}/config" ]
 }
 
 # -----------------------------------------------------------------------------
 # Get PID file path
 # -----------------------------------------------------------------------------
-flashmoe_get_pid_file() {
-    echo "${FLASHMOE_CONFIG_DIR}/server.pid"
+flashchat_get_pid_file() {
+    echo "${FLASHCHAT_CONFIG_DIR}/server.pid"
 }
 
 # -----------------------------------------------------------------------------
 # Get sessions directory
-# Note: Uses ~/.flash-moe/sessions for compatibility with existing chat.m
+# Note: Uses ~/.flashchat/sessions for compatibility with existing chat.m
 # -----------------------------------------------------------------------------
-flashmoe_get_sessions_dir() {
-    echo "${HOME}/.flash-moe/sessions"
+flashchat_get_sessions_dir() {
+    echo "${HOME}/.flashchat/sessions"
 }
 
 # Export functions for use in subshells
-export -f flashmoe_load_config
-export -f flashmoe_get
-export -f flashmoe_create_default_config
-export -f flashmoe_has_config
-export -f flashmoe_get_pid_file
-export -f flashmoe_get_sessions_dir
+export -f flashchat_load_config
+export -f flashchat_get
+export -f flashchat_create_default_config
+export -f flashchat_has_config
+export -f flashchat_get_pid_file
+export -f flashchat_get_sessions_dir
