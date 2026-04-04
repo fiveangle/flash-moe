@@ -1,4 +1,4 @@
-# Flash-MoE Implementation Plan
+# Flashchat Implementation Plan
 
 > Last Updated: 2026-03-27
 > Status: Phase 1-6 Complete (Future Enhancements Pending)
@@ -7,7 +7,7 @@
 
 ## Overview
 
-This document captures the implementation plan for the Flash-MoE unified management framework. As implementation progresses, changes will be documented here with reasons for any scope modifications.
+This document captures the implementation plan for the Flashchat unified management framework. As implementation progresses, changes will be documented here with reasons for any scope modifications.
 
 ---
 
@@ -22,10 +22,10 @@ This document captures the implementation plan for the Flash-MoE unified managem
 
 | Item | Value |
 |------|-------|
-| Config location | `~/.config/flash-moe/config` |
+| Config location | `~/.config/flashchat/config` |
 | Config created | Automatically on first run |
-| PID file | `~/.config/flash-moe/server.pid` |
-| Sessions | `~/.flash-moe/sessions/` (for compatibility with chat.m) |
+| PID file | `~/.config/flashchat/server.pid` |
+| Sessions | `~/.flashchat/sessions/` |
 | Reset | `flashchat config` → re-run setup wizard (retains sessions) |
 
 ### Command Interface

@@ -1,4 +1,4 @@
-# Flash-MoE: Running a 397B Parameter Model on a Laptop
+# Flashchat: Running a 397B Parameter Model on a Laptop
 
 > **[Read the paper](paper/flash_moe.pdf)** — Full technical details, 90+ experiments, and the story of how an AI and a human built this in 24 hours.
 

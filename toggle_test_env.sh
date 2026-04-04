@@ -23,8 +23,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-FLASHMOE_CONFIG_DIR="${HOME}/.config/flash-moe"
-FLASHMOE_SESSIONS_DIR="${HOME}/.flash-moe/sessions"
+FLASHCHAT_CONFIG_DIR="${HOME}/.config/flashchat"
+FLASHCHAT_SESSIONS_DIR="${HOME}/.flashchat/sessions"
 HF_CACHE_DIR="${HOME}/.cache/huggingface/hub/models--mlx-community--Qwen3.5-397B-A17B-4bit"
 SUFFIX=".live"
 
@@ -51,7 +51,7 @@ get_cache_size() {
     fi
 }
 
-echo "=== Flash-MoE Environment Toggle ==="
+echo "=== Flashchat Environment Toggle ==="
 echo ""
 
 # Check current state
@@ -107,13 +107,13 @@ if [ -d "${HF_CACHE_DIR}${SUFFIX}" ]; then
     mv "${HF_CACHE_DIR}${SUFFIX}" "$HF_CACHE_DIR"
     
     # Restore config
-    if [ -f "${FLASHMOE_CONFIG_DIR}/config${SUFFIX}" ]; then
-        mv "${FLASHMOE_CONFIG_DIR}/config${SUFFIX}" "${FLASHMOE_CONFIG_DIR}/config"
+    if [ -f "${FLASHCHAT_CONFIG_DIR}/config${SUFFIX}" ]; then
+        mv "${FLASHCHAT_CONFIG_DIR}/config${SUFFIX}" "${FLASHCHAT_CONFIG_DIR}/config"
     fi
     
     # Restore sessions
-    if [ -d "${FLASHMOE_SESSIONS_DIR}${SUFFIX}" ]; then
-        mv "${FLASHMOE_SESSIONS_DIR}${SUFFIX}" "$FLASHMOE_SESSIONS_DIR"
+    if [ -d "${FLASHCHAT_SESSIONS_DIR}${SUFFIX}" ]; then
+        mv "${FLASHCHAT_SESSIONS_DIR}${SUFFIX}" "$FLASHCHAT_SESSIONS_DIR"
     fi
     
     echo "Live environment restored."
@@ -146,14 +146,14 @@ else
     fi
     
     # Backup config
-    if [ -f "${FLASHMOE_CONFIG_DIR}/config" ]; then
-        mkdir -p "$FLASHMOE_CONFIG_DIR"
-        mv "${FLASHMOE_CONFIG_DIR}/config" "${FLASHMOE_CONFIG_DIR}/config${SUFFIX}"
+    if [ -f "${FLASHCHAT_CONFIG_DIR}/config" ]; then
+        mkdir -p "$FLASHCHAT_CONFIG_DIR"
+        mv "${FLASHCHAT_CONFIG_DIR}/config" "${FLASHCHAT_CONFIG_DIR}/config${SUFFIX}"
     fi
     
     # Backup sessions
-    if [ -d "$FLASHMOE_SESSIONS_DIR" ]; then
-        mv "$FLASHMOE_SESSIONS_DIR" "${FLASHMOE_SESSIONS_DIR}${SUFFIX}"
+    if [ -d "$FLASHCHAT_SESSIONS_DIR" ]; then
+        mv "$FLASHCHAT_SESSIONS_DIR" "${FLASHCHAT_SESSIONS_DIR}${SUFFIX}"
     fi
     
     echo "Fresh test environment ready."

@@ -1504,8 +1504,8 @@ int main(int argc, char **argv) {
         int num_active_experts = 4;  // --k flag
         int do_verify = 0;
         int use_fast = 0;
-        // Support FLASHMOE_MODEL_PATH environment variable
-        const char *env_model_path = getenv("FLASHMOE_MODEL_PATH");
+        // Support FLASHCHAT_MODEL_PATH environment variable
+        const char *env_model_path = getenv("FLASHCHAT_MODEL_PATH");
         const char *model_path = env_model_path ? env_model_path : MODEL_PATH;
 
         static struct option long_options[] = {

@@ -459,7 +459,7 @@ def process_layer_parallel(args_tuple):
 
 def get_default_model_path():
     """Get default model path from environment or compute from MODEL_REPO."""
-    model_repo = os.environ.get('FLASHMOE_MODEL_REPO', 'mlx-community/Qwen3.5-397B-A17B-4bit')
+    model_repo = os.environ.get('FLASHCHAT_MODEL_REPO', 'mlx-community/Qwen3.5-397B-A17B-4bit')
     escaped_repo = model_repo.replace('/', '--')
     hf_cache = os.path.expanduser('~/.cache/huggingface/hub')
     snapshot_dir = f"{hf_cache}/models--{escaped_repo}/snapshots"
@@ -476,8 +476,8 @@ def main():
     parser = argparse.ArgumentParser(
         description='Requantize 4-bit packed experts to 2-bit')
     parser.add_argument('--model', type=str,
-                        default=os.environ.get('FLASHMOE_MODEL_PATH') or get_default_model_path(),
-                        help='Path to model directory (or set FLASHMOE_MODEL_PATH)')
+                        default=os.environ.get('FLASHCHAT_MODEL_PATH') or get_default_model_path(),
+                        help='Path to model directory (or set FLASHCHAT_MODEL_PATH)')
     parser.add_argument('--output', type=str, default=None,
                         help='Output directory (default: MODEL/packed_experts_2bit)')
     parser.add_argument('--layer', type=int, default=None,

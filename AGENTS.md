@@ -1,4 +1,43 @@
-# AGENTS.md — Flash-MoE Development Guide
+# README — What is this, and how is this possible ?
+
+## History:
+
+Back when Apple began its quest to free itself from reliance on CPU makers Motorola (68k), IBM (PowerPC), and Intel (x86) to provide the beating heart of its microcomputer offerings, with the flexible license framework of the fledgling ARM ecosystem, they bet hard on it, and it paid off.  But beyond the sheer compute power and efficiency, almost as an aside, it opened the door for them to enter the then-anemic handset computing workspace. This offered them freedom to bring many of the functions of its systems that were historically off-loaded to other 3rd party vendors in-house. This brought with it the ability to dispense with buying a 3rd party SSD processors from the likes of Samsung and Toshiba, instead performing all of those critical functions on-die within its own "A", then later "M" series processors. While a huge undertaking, so was ripping out the heart of their computers and replacing it with another, which Apple was no stranger to, having done so 3 times in the previous 2 decades.
+
+One of the major benefits of this effort was bringing as many anciliaary functions under control of a processor it now had full control off. Driven primarily as a cost reduction effort, bringing NAND die control directly within control of the main CPU was one such effort. While it prevented easy upgrades of storage, it offered one major benefit besides not having to pay a 3rd party for their SSD management processor: S P E E D
+
+What Apple has coined their "Apple Fabric", which is just a fancy name for their CPU performing all the NAND management that is traditionally reserved for a specialized processor like those from Sandforce (prior to their purchase by Seagate), Samsung, Marvel, and others, is now NAND chips connected as close as possible to the PCI bus so the CPU can manage it. This means near-wire speed for the Apple Fabric SSDs.
+
+## How It Changes Everything
+
+Instead of reliance on 3rd-party SSD processors managing NAND die control, the Apple M series CPU in today's "Apple Silicon" systems attains storage speed at near wire speed of the underlying architecture, resulting in the ability to attain speeds never before possible with secondary, intermediary NAND processors. And with that, comes the ability to reach read speeds that, while never able to reach parity with RAM, can, similary to Intel's all-but-defunct Optane memory systems, and now more comtemorary CTX "memory" can get close enough to RAM speed to be usable.
+
+## What Is This Project
+
+This project, envisioned by the original author Dan Woods, is the answer to the question, "What if instead of loading an entire Large Language Model in RAM the traditional way, we instead stream the individual LLM layers direclty to the GPU from storage?" Before Apple Fabric being ubiquotous across Apple's line up, include the base model Macbook Pro M5 I am typing this on, the idea was unheard of outside of esoteric non-volatile storage systems.
+
+Using approximately 6GB of memory-resident space to store critical LLM metadata that requires very low-latency access for performance, when running, the 60 "expert" LLM layers of this project are streamed direclty from the underlying Apple Fabrid storage to the GPU for inference processing when each layer is activated by the respective prompt processing.  The result?  At over 200GB in size, the Quen3.5-397B-A17B-4bit LLM is historically reserved for big-iron systems in order to run. The model works by having 60 "experts" at the ready, each approximately 3.5GB in size, and based on the user prompt, will activate just a portion of those experts for each token being processed, streaming that experts data from the Apple Fabric to the GPU for processing.
+
+The result? Over 3.5 tok/sec processing on a base model Macbook Pro M5. A feat unheard of ever before in history.
+
+## Getting Started
+
+Below is Dan Wood's original "readme" and paper, which I highly recommend you read, as it offers a fascinating peek into both the ingenuity of the human mind, as well as a wonderful demonstration of the capability multiplier that enlisting the power of machine learning offers to see that human ingenuity to fruition. 
+
+Dan's original project was polished just enough to publish his whitepaper on his endevor, but was not ready for prime time regarding running by public, having fundemental issues with experts extraction and tokenizer problems. This project provides a means for the average joe to setup and run flashchat on their own laptop without much fanfare.  Using the power of Opencode and the stealth coding-specific machine learning model Big Pickle, within a few hours I was able to turn this academic effort into a (hopefully) turn-key project you can run yourself.
+
+You can find more details in RUN.md (written entirely by Big Pickle through my guidance) but the meat of it should be to simply:
+<!-- git clone https://github.com/fiveangle/flash-moe -->
+cd flash-moe
+./flashchat
+
+And follow the prompts to setup and run.
+
+## Requirements
+Apple Silicon computer with at least 16GB of RAM
+At least 415GB of free space on on the Apple Fabric SSD builtin to your Mac
+xtools-cli
+# AGENTS.md — Flashchat Development Guide
 
 This is a pure C/Metal inference engine for running 397B parameter MoE models on Apple Silicon.
 
@@ -76,6 +115,7 @@ clang -O2 test_lzfse.c -lcompression -o test_lzfse && ./test_lzfse
 - **Server-side debug visibility matters.** Changes to `infer --serve` should preserve persistent logging so background server runs remain debuggable without requiring an interactive launch.
 - **Server control commands must verify reality, not assume it.** Start/stop helpers should confirm health or actual process exit before reporting success or removing pid/state files.
 - **Persistent server/runtime toggles should be first-class config options.** If a setting is useful beyond one-off debugging, surface it through the config file and `flashchat` configuration wizard instead of leaving it env-only.
+- **When a functional block or milestone is complete, consider prompting for a commit checkpoint.** Don’t interrupt active debugging for every small change, but when a coherent unit of work lands, ask whether it should be committed before moving on.
 
 ### C/Objective-C
 

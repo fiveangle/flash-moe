@@ -217,8 +217,8 @@ static void server_log_open(void) {
         if (!home || !home[0]) return;
         configured_path = [NSString stringWithFormat:@"%s/.config/flashchat/logs/server.log", home];
     }
-    const char *env_debug = getenv("FLASHMOE_SERVER_DEBUG");
-    const char *env_http_log = getenv("FLASHMOE_SERVER_HTTP_LOG");
+    const char *env_debug = getenv("FLASHCHAT_SERVER_DEBUG");
+    const char *env_http_log = getenv("FLASHCHAT_SERVER_HTTP_LOG");
     g_server_debug_enabled = (env_debug && env_debug[0] &&
                               strcmp(env_debug, "0") != 0 &&
                               strcasecmp(env_debug, "false") != 0 &&
@@ -6525,17 +6525,17 @@ static int fill_request_from_responses_json(NSDictionary *root, ApiRequest *req,
     }, req, err_msg);
 }
 
-// Save a conversation turn to ~/.flash-moe/sessions/<session_id>.jsonl
+// Save a conversation turn to ~/.flashchat/sessions/<session_id>.jsonl
 // Shared data store with the chat client.
 static void server_save_turn(const char *session_id, const char *role, const char *content) {
     if (!session_id || !session_id[0] || !content) return;
     const char *home = getenv("HOME");
     if (!home) home = "/tmp";
     char dir[1024], path[1024];
-    snprintf(dir, sizeof(dir), "%s/.flash-moe/sessions", home);
+    snprintf(dir, sizeof(dir), "%s/.flashchat/sessions", home);
     mkdir(dir, 0755);
     char parent[1024];
-    snprintf(parent, sizeof(parent), "%s/.flash-moe", home);
+    snprintf(parent, sizeof(parent), "%s/.flashchat", home);
     mkdir(parent, 0755);
     mkdir(dir, 0755);
     snprintf(path, sizeof(path), "%s/%s.jsonl", dir, session_id);
@@ -7057,12 +7057,12 @@ static PromptTokens *tokenize_continuation_turn(const char *user_content) {
     return pt;
 }
 
-// Load custom system prompt from ~/.flash-moe/system.md, or use default
+// Load custom system prompt from ~/.flashchat/system.md, or use default
 static char *load_system_prompt(void) {
     const char *home = getenv("HOME");
     if (home) {
         char path[1024];
-        snprintf(path, sizeof(path), "%s/.flash-moe/system.md", home);
+        snprintf(path, sizeof(path), "%s/.flashchat/system.md", home);
         FILE *f = fopen(path, "r");
         if (f) {
             fseek(f, 0, SEEK_END);
@@ -7724,8 +7724,8 @@ static void print_usage(const char *prog) {
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        // Support FLASHMOE_MODEL_PATH environment variable
-        const char *env_model_path = getenv("FLASHMOE_MODEL_PATH");
+        // Support FLASHCHAT_MODEL_PATH environment variable
+        const char *env_model_path = getenv("FLASHCHAT_MODEL_PATH");
         const char *model_path = env_model_path ? env_model_path : MODEL_PATH_DEFAULT;
         const char *weights_path = NULL;
         const char *manifest_path = NULL;
@@ -7737,12 +7737,12 @@ int main(int argc, char **argv) {
         int cache_entries = 0;  // default 0: trust OS page cache (38% faster than Metal LRU)
         int malloc_cache_entries = 0;  // 0 = disabled (override with --malloc-cache)
         
-        // Support FLASHMOE_SERVER_PORT environment variable
-        const char *env_serve_port = getenv("FLASHMOE_SERVER_PORT");
+        // Support FLASHCHAT_SERVER_PORT environment variable
+        const char *env_serve_port = getenv("FLASHCHAT_SERVER_PORT");
         int serve_port = env_serve_port ? atoi(env_serve_port) : 0;
-        const char *env_temperature = getenv("FLASHMOE_TEMPERATURE");
-        const char *env_top_p = getenv("FLASHMOE_TOP_P");
-        const char *env_reasoning = getenv("FLASHMOE_REASONING");
+        const char *env_temperature = getenv("FLASHCHAT_TEMPERATURE");
+        const char *env_top_p = getenv("FLASHCHAT_TOP_P");
+        const char *env_reasoning = getenv("FLASHCHAT_REASONING");
         if (env_temperature && env_temperature[0]) g_default_temperature = strtof(env_temperature, NULL);
         if (env_top_p && env_top_p[0]) g_default_top_p = strtof(env_top_p, NULL);
         if (env_reasoning && env_reasoning[0]) {
@@ -7751,17 +7751,17 @@ int main(int argc, char **argv) {
                                            strcasecmp(env_reasoning, "off") != 0);
         }
 
-        // Support FLASHMOE_QUANTIZATION environment variable (4bit or 2bit)
-        const char *env_quantization = getenv("FLASHMOE_QUANTIZATION");
+        // Support FLASHCHAT_QUANTIZATION environment variable (4bit or 2bit)
+        const char *env_quantization = getenv("FLASHCHAT_QUANTIZATION");
         if (env_quantization && strcmp(env_quantization, "2bit") == 0) {
             g_use_2bit = 1;
         }
 
-        // Also try to read config from ~/.config/flash-moe/config if env vars not set
+        // Also try to read config from ~/.config/flashchat/config if env vars not set
         const char *home = getenv("HOME");
         if (home) {
             char config_path[1024];
-            snprintf(config_path, sizeof(config_path), "%s/.config/flash-moe/config", home);
+            snprintf(config_path, sizeof(config_path), "%s/.config/flashchat/config", home);
             
             FILE *cfg = fopen(config_path, "r");
             if (cfg) {
