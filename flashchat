@@ -788,6 +788,88 @@ check_hf_cli() {
     fi
 }
 
+check_homebrew() {
+    if command -v brew &> /dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+get_macos_version_label() {
+    local version
+    version=$(sw_vers -productVersion 2>/dev/null)
+    local major="${version%%.*}"
+    local codename="Unknown"
+
+    case "$major" in
+        11) codename="Big Sur" ;;
+        12) codename="Monterey" ;;
+        13) codename="Ventura" ;;
+        14) codename="Sonoma" ;;
+        15) codename="Sequoia" ;;
+    esac
+
+    if [ -n "$version" ]; then
+        echo "macOS $version ($codename)"
+    else
+        echo "macOS (version unavailable)"
+    fi
+}
+
+show_dependency_overview() {
+    local os_label
+    os_label=$(get_macos_version_label)
+    local brew_version
+    if check_homebrew; then
+        brew_version=$(brew --version 2>/dev/null | head -1)
+    else
+        brew_version="Not installed yet"
+    fi
+
+    echo ""
+    echo "=== Setup Dependencies ==="
+    echo ""
+    echo "Homebrew: package manager for macOS."
+    echo "  Trusted open-source package manager for $os_label"
+    echo "  Status: $brew_version"
+    echo "  Repo: https://github.com/Homebrew/brew (47k stars, 11k forks as of 2026-04)"
+    echo ""
+    echo "Apple Xcode CLI: tools to build macOS and iOS apps from the command line."
+    echo "  If prompted in another window, choose the default install options."
+    echo ""
+    echo "Hugging Face Hub utility for model download: https://huggingface.co"
+    echo "  Installed in a temporary Python virtual environment and removed after model download."
+    echo ""
+    echo "NumPy: numerical computing library for Python: https://numpy.org"
+    echo "  Installed in the project Python virtual environment for extraction/repack scripts."
+    echo ""
+}
+
+bootstrap_homebrew_noninteractive() {
+    if check_homebrew; then
+        return 0
+    fi
+
+    echo "Homebrew is not installed."
+    echo "Installing Homebrew automatically (NONINTERACTIVE=1)..."
+
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+    if [ -x /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [ -x /usr/local/bin/brew ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+
+    if check_homebrew; then
+        echo "Homebrew installed successfully."
+        return 0
+    fi
+
+    echo "ERROR: Homebrew install did not complete successfully."
+    return 1
+}
+
 prompt_download_model() {
     local model_repo
     model_repo=$(flashchat_get MODEL_REPO)
@@ -1024,6 +1106,31 @@ check_xcode_cli() {
 
 prompt_install_xcode_cli() {
     echo ""
+    echo "========================================"
+    echo "  Ready to install tools for Flashchat?"
+    echo "========================================"
+    show_dependency_overview
+    echo "  (X to exit the setup wizard)"
+    read -p "Begin downloading the needed tools? [Y/x] " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Xx]$ ]]; then
+        echo "User cancelled."
+        echo "Re-run flashchat to begin the setup wizard."
+        exit 0
+    fi
+    if ! [[ $REPLY =~ ^[Yy]$ ]] && [ -n "$REPLY" ]; then
+        echo "Invalid selection. Re-run flashchat and choose Y or X."
+        exit 1
+    fi
+
+    if ! check_homebrew; then
+        if ! bootstrap_homebrew_noninteractive; then
+            echo "Homebrew installation failed."
+            echo "Continuing with Xcode CLI tools installation."
+        fi
+    fi
+
+    echo ""
     echo "=== Xcode Command Line Tools Required ==="
     echo ""
     echo "Flashchat requires Xcode command line tools to compile the inference engine."
@@ -1035,9 +1142,19 @@ prompt_install_xcode_cli() {
     if [[ $REPLY =~ ^[Yy]$ ]] || [ -z "$REPLY" ]; then
         echo "Installing Xcode command line tools..."
         echo "(This may prompt for your password)"
-        xcode-select --install
+        xcode-select --install || true
         echo ""
-        echo "Please complete the installation in the dialog, then run flashchat again."
+        echo "If prompted in another window, choose default options."
+        echo "Waiting for Xcode CLI tools to become available..."
+        for _ in $(seq 1 120); do
+            if check_xcode_cli; then
+                echo "Xcode command line tools detected."
+                return 0
+            fi
+            sleep 5
+        done
+        echo "Xcode CLI tools are still not detected."
+        echo "Please finish installation, then run flashchat again."
         exit 0
     else
         echo "Cannot proceed without Xcode CLI tools. Exiting."
