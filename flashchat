@@ -682,6 +682,11 @@ FLASHCHAT_VENV=""
 
 ensure_venv() {
     if [ -n "$FLASHCHAT_VENV" ] && [ -f "$FLASHCHAT_VENV/bin/python" ]; then
+        if "$FLASHCHAT_VENV/bin/python" -c "import numpy" >/dev/null 2>&1; then
+            return 0
+        fi
+        echo "NumPy missing from existing virtual environment. Installing..."
+        "$FLASHCHAT_VENV/bin/pip" install numpy -q
         return 0
     fi
     
@@ -690,6 +695,10 @@ ensure_venv() {
     if [ ! -f "$FLASHCHAT_VENV/bin/python" ]; then
         echo "Creating Python virtual environment..."
         python3 -m venv "$FLASHCHAT_VENV"
+    fi
+
+    if ! "$FLASHCHAT_VENV/bin/python" -c "import numpy" >/dev/null 2>&1; then
+        echo "Installing NumPy in project virtual environment..."
         "$FLASHCHAT_VENV/bin/pip" install numpy -q
     fi
 }
